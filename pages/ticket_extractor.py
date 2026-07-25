@@ -12,7 +12,28 @@ except ImportError:
 from extractor import extract_ticket_data
 
 st.title("🎫 Ticket Extractor")
-st.write("Upload PDF ticket(s)")
+st.write("Upload one PDF ticket at a time, so you can review its result before moving to the next.")
+
+TRIP_TYPE_OPTIONS = {
+    "Auto-detect": "auto",
+    "One-way (single flight)": "one_way",
+    "One-way, connecting (layover, same direction)": "connecting",
+    "Round-trip": "round_trip",
+}
+trip_type_label = st.radio(
+    "Trip type",
+    options=list(TRIP_TYPE_OPTIONS.keys()),
+    index=0,
+    horizontal=True,
+    help=(
+        "If you already know the shape of the itinerary, select it here instead of "
+        "leaving it on Auto-detect. 'One-way' and 'connecting' guarantee no return leg "
+        "is ever reported, even if the PDF has stray text that could otherwise be "
+        "misread as one. 'Round-trip' will flag a warning if no return leg is actually "
+        "found, so a mismatch is visible instead of silently wrong."
+    ),
+)
+trip_type = TRIP_TYPE_OPTIONS[trip_type_label]
 
 
 def build_ocr_lookup(pdf, text):
@@ -37,45 +58,42 @@ def build_ocr_lookup(pdf, text):
     return lookup
 
 
-def extract_from_pdf(uploaded_file):
+def extract_from_pdf(uploaded_file, trip_type):
     try:
         with pdfplumber.open(uploaded_file) as pdf:
             text = "\n".join(page.extract_text() or "" for page in pdf.pages)
             ocr_lookup = build_ocr_lookup(pdf, text)
     except Exception as e:
         st.error(f"Error reading {uploaded_file.name}: {e}")
-        return None
+        return None, None
 
-    rows = extract_ticket_data(text, ocr_name_lookup=ocr_lookup)
+    rows, warning = extract_ticket_data(text, ocr_name_lookup=ocr_lookup, trip_type=trip_type)
     if not rows:
-        return None
+        return None, warning
 
     for row in rows:
         row["File Name"] = uploaded_file.name
 
-    return rows
+    return rows, warning
 
 
-uploaded_files = st.file_uploader("Upload Ticket(s)", type=["pdf"], accept_multiple_files=True)
+uploaded_file = st.file_uploader("Upload Ticket", type=["pdf"], accept_multiple_files=False)
 
-if uploaded_files:
-    all_rows = []
-    with st.spinner("Extracting passenger data from PDFs..."):
-        for f in uploaded_files:
-            rows = extract_from_pdf(f)
-            if rows:
-                all_rows.extend(rows)
-            else:
-                st.warning(f"Could not extract any passenger rows from {f.name}.")
+if uploaded_file:
+    with st.spinner("Extracting passenger data from PDF..."):
+        rows, warning = extract_from_pdf(uploaded_file, trip_type)
 
-    if not all_rows:
-        st.error("Error: Could not extract valid data from the uploaded PDF(s). "
+    if warning:
+        st.warning(warning)
+
+    if not rows:
+        st.error("Error: Could not extract valid data from the uploaded PDF. "
                   "Ensure text is selectable (not a scanned image).")
     else:
-        st.success(f"Extracted {len(all_rows)} passenger row(s) from {len(uploaded_files)} file(s).")
+        st.success(f"Extracted {len(rows)} passenger row(s) from {uploaded_file.name}.")
         column_order = ["File Name", "PNR", "Name", "Gender", "Sector",
                          "Flight Number", "Return Sector", "Return Flight Number"]
-        df = pd.DataFrame(all_rows)[column_order]
+        df = pd.DataFrame(rows)[column_order]
         st.dataframe(df, use_container_width=True)
 
         csv = df.to_csv(index=False).encode("utf-8")
