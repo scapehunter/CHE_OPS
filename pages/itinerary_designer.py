@@ -213,11 +213,17 @@ if "stage1_grid" in st.session_state:
 
     st.divider()
     if st.button("🕒 Generate Timewise Itinerary"):
-        rows = build_stage3_timeline(
-            grid["timed_events"], st.session_state["stage2_activities"],
-            meal_rules, rules_data["default_slot_starts"],
-        )
-        st.session_state["stage3_df"] = pd.DataFrame(rows)
+        if "timed_events" not in grid:
+            st.error(
+                "This plan was generated before Stage 3 support was added. Click "
+                "'Generate Plan Grid' above to rebuild it, then try again."
+            )
+        else:
+            rows = build_stage3_timeline(
+                grid["timed_events"], st.session_state.get("stage2_activities", []),
+                meal_rules, rules_data["default_slot_starts"],
+            )
+            st.session_state["stage3_df"] = pd.DataFrame(rows)
 
     if "stage3_df" in st.session_state:
         st.subheader("Stage 3: Timewise Itinerary")

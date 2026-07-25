@@ -303,4 +303,4 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
             "Notes": r["Notes"],
         }
         for r in rows
-    ]
+    ] 
