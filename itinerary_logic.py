@@ -6,6 +6,7 @@ rules loaded from rules.json. Kept free of any Streamlit imports so this can be 
 directly.
 """
 import json
+from collections import defaultdict
 from datetime import datetime, timedelta
 
 
@@ -107,6 +108,11 @@ def build_stage1_grid(
     auto-generated logistics content (arrival, transfers, assembly, check-in, departure).
     These are meant to never be edited or added to via any Stage 2 activity UI - use
     compute_addable_slots() to find which cells are actually open for activities.
+
+    Also returns "timed_events": the same auto-generated entries as a flat list of
+    {"datetime": ..., "label": ..., "type": ...} dicts with their exact computed time
+    preserved (the day/slot grid only keeps bucketed display text, which loses the
+    precise time) - this is what Stage 3 timeline generation consumes.
     """
     num_days = (end_date - start_date).days + 1
     days = []
@@ -119,8 +125,9 @@ def build_stage1_grid(
         })
     day_dates = [d["date"] for d in days]
     locked_slots = set()
+    timed_events = []
 
-    def add_entry(dt, text):
+    def add_entry(dt, text, event_type):
         target_date = dt.date()
         spilled_note = ""
         if target_date not in day_dates:
@@ -133,6 +140,11 @@ def build_stage1_grid(
                 new_text = text + spilled_note
                 day[slot] = f"{existing}\n{new_text}" if existing else new_text
                 locked_slots.add((target_date, slot))
+                # Keep the original dt (not the clamped target_date) for Stage 3 - the
+                # ⚠️ note already flags the clamp; Stage 3 sorts by real time, and an
+                # out-of-range event sorting to its true (if odd) position is more
+                # honest than silently pretending it happened at a valid time.
+                timed_events.append({"datetime": dt, "label": text + spilled_note, "type": event_type})
                 return
 
     def transfer_notes(minutes, window_start_dt, window_end_dt):
@@ -149,15 +161,15 @@ def build_stage1_grid(
     departure_dt = datetime.combine(end_date, departure_time)
 
     # --- Arrival day ---
-    add_entry(arrival_dt, f"Arrival: {arrival_airport}, {arrival_time.strftime('%H:%M')}")
+    add_entry(arrival_dt, f"Arrival: {arrival_airport}, {arrival_time.strftime('%H:%M')}", "Arrival")
 
     depart_for_program_rule = next((r for r in buffer_rules if r["id"] == "depart_for_hotel"), None)
     if depart_for_program_rule:
         depart_for_program_dt = arrival_dt + timedelta(minutes=depart_for_program_rule["offset_minutes"])
         program_arrival_dt = depart_for_program_dt + timedelta(minutes=arrival_travel_minutes)
         note = transfer_notes(arrival_travel_minutes, depart_for_program_dt, program_arrival_dt)
-        add_entry(depart_for_program_dt, f"{depart_for_program_rule['label']}{note}")
-        add_entry(program_arrival_dt, f"Arrival at {program_location or 'program location'}")
+        add_entry(depart_for_program_dt, f"{depart_for_program_rule['label']}{note}", "Road Transfer")
+        add_entry(program_arrival_dt, f"Arrival at {program_location or 'program location'}", "Road Transfer")
 
     # --- Departure day ---
     departure_side_rules = [r for r in buffer_rules if r["anchor"] == "flight_departure"]
@@ -165,19 +177,19 @@ def build_stage1_grid(
     for rule in departure_side_rules:
         t = departure_dt + timedelta(minutes=rule["offset_minutes"])
         departure_side_times[rule["id"]] = t
-        add_entry(t, rule["label"])
+        add_entry(t, rule["label"], rule["type"])
 
     if departure_side_times:
         earliest_prep_dt = min(departure_side_times.values())
         depart_program_for_airport_dt = earliest_prep_dt - timedelta(minutes=departure_travel_minutes)
         note = transfer_notes(departure_travel_minutes, depart_program_for_airport_dt, earliest_prep_dt)
-        add_entry(depart_program_for_airport_dt, f"Depart {program_location or 'program location'} for airport{note}")
+        add_entry(depart_program_for_airport_dt, f"Depart {program_location or 'program location'} for airport{note}", "Road Transfer")
 
-    add_entry(departure_dt, f"Departure: {departure_airport}, {departure_time.strftime('%H:%M')}")
+    add_entry(departure_dt, f"Departure: {departure_airport}, {departure_time.strftime('%H:%M')}", "Departure")
 
     return {
         "plan_name": plan_name, "program_location": program_location,
-        "days": days, "locked_slots": locked_slots,
+        "days": days, "locked_slots": locked_slots, "timed_events": timed_events,
     }
 
 
@@ -212,4 +224,83 @@ def compute_addable_slots(days, locked_slots, start_date, end_date, arrival_time
                 continue
             addable.add((day["date"], slot_name))
     return addable
-    
+
+
+def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_slot_starts):
+    """
+    Merges Stage 1's exact-timed logistics events with Stage 2's slot-level activities
+    into one chronologically sorted timewise itinerary.
+
+    stage2_activities: list of dicts, one per activity/meal added in Stage 2:
+      {"date": date, "slot": slot_name, "order": int (insertion order, for sequencing
+       multiple items in the same slot), "kind": "Activity" or "Meal", "name": str,
+       "duration_minutes": int, "transfer_required": bool, "transfer_minutes": int or None}
+
+    default_slot_starts: dict of slot_name -> "HH:MM", the assumed start-of-day-part time
+      used to anchor a slot's activities when nothing else establishes a start time
+      (a locked slot already has exact times from Stage 1; only Stage 2 slots need this).
+      This is an assumption, not something the person stated explicitly - it's stored in
+      rules.json so it can be corrected without a code change.
+
+    For each (date, slot) group of Stage 2 items, sequenced in insertion order starting
+    from default_slot_starts[slot]: if an item needs a transfer, a "Transfer to X" row is
+    emitted first (transfer_minutes long), then the item itself (duration_minutes long).
+    A "Meal" kind is snapped forward to its rule's window_start if it would otherwise
+    start earlier, and flagged with a note if it would start after the window closes.
+
+    Returns a list of {"Date": str, "Time": str, "Activity": str, "Type": str, "Notes":
+    str} rows, sorted chronologically across the whole plan (locked Stage 1 slots and
+    open Stage 2 slots never overlap in practice, by construction of compute_addable_slots,
+    so there's no ordering ambiguity between the two sources within a single slot).
+    """
+    rows = []
+    for event in timed_events:
+        rows.append({"dt": event["datetime"], "Activity": event["label"], "Type": event["type"], "Notes": ""})
+
+    grouped = defaultdict(list)
+    for a in stage2_activities:
+        grouped[(a["date"], a["slot"])].append(a)
+
+    meal_rule_by_name = {m["name"]: m for m in meal_rules}
+
+    for (day_date, slot_name), activities in grouped.items():
+        activities_sorted = sorted(activities, key=lambda a: a["order"])
+        start_str = default_slot_starts.get(slot_name, "09:00")
+        start_minutes = _parse_hhmm(start_str)
+        running_dt = datetime.combine(day_date, datetime.min.time()) + timedelta(minutes=start_minutes)
+
+        for a in activities_sorted:
+            if a["transfer_required"] and a["transfer_minutes"]:
+                rows.append({
+                    "dt": running_dt, "Activity": f"Transfer to {a['name']}",
+                    "Type": "Road Transfer", "Notes": "",
+                })
+                running_dt += timedelta(minutes=a["transfer_minutes"])
+
+            note = ""
+            if a["kind"] == "Meal":
+                meal_rule = meal_rule_by_name.get(a["name"])
+                if meal_rule:
+                    window_start_dt = datetime.combine(day_date, datetime.min.time()) + timedelta(
+                        minutes=_parse_hhmm(meal_rule["window_start"]))
+                    window_end_dt = datetime.combine(day_date, datetime.min.time()) + timedelta(
+                        minutes=_parse_hhmm(meal_rule["window_end"]))
+                    if running_dt < window_start_dt:
+                        running_dt = window_start_dt
+                    if running_dt > window_end_dt:
+                        note = f"⚠️ outside usual {a['name']} window ({meal_rule['window_start']}-{meal_rule['window_end']})"
+
+            rows.append({"dt": running_dt, "Activity": a["name"], "Type": a["kind"], "Notes": note})
+            running_dt += timedelta(minutes=a["duration_minutes"])
+
+    rows.sort(key=lambda r: r["dt"])
+    return [
+        {
+            "Date": r["dt"].strftime("%d %b %Y"),
+            "Time": r["dt"].strftime("%H:%M"),
+            "Activity": r["Activity"],
+            "Type": r["Type"],
+            "Notes": r["Notes"],
+        }
+        for r in rows
+    ]
