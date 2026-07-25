@@ -91,3 +91,4 @@ def build_stage1_grid(
     add_entry(end_date, f"Departure: {departure_airport}, {departure_time.strftime('%H:%M')}")
 
     return {"plan_name": plan_name, "program_location": program_location, "days": days}
+
