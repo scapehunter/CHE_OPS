@@ -40,6 +40,8 @@
       "end": "24:00"
     }
   ],
+  "default_slot_starts": {"Morning": "09:00", "Afternoon": "14:00", "Evening": "17:00"},
+  "_comment_default_slot_starts": "Assumed start time for Stage 2 activities/meals when generating the Stage 3 timewise itinerary, roughly anchored to 'after the previous meal window closes' (09:00 after breakfast, 14:00 after lunch, 17:00 after snacks). This is an assumption, not something stated explicitly - adjust freely, no code change needed.",
   "programs": [
     {
       "name": "Ladakh",
