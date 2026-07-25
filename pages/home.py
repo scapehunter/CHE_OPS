@@ -18,6 +18,11 @@ st.page_link(
     label="🔍 Compare Datasets",
     help="Match two CSV/Excel files on a common column and spot differences",
 )
+st.page_link(
+    "pages/itinerary_designer.py",
+    label="🗺️ Itinerary Designer (Under Construction)",
+    help="Auto-generate the travel-day schedule from flight and hotel details",
+)
 
 # Add a link for each new tool here as you build it, e.g.:
 # st.page_link("pages/another_tool.py", label="🛠️ Another Tool", help="...")

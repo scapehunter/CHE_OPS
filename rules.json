@@ -1,0 +1,27 @@
+{
+  "_comment": "Each rule computes one auto-generated row's time as an offset from a known 'anchor' time. anchor must match a value the itinerary tool actually has for that day (e.g. flight_departure, flight_arrival, hotel_checkin). offset_minutes is negative for 'before anchor', positive for 'after anchor'. Add new rules here as later stages introduce new anchors (e.g. activity_start, dinner_time) - no code changes needed for a new rule, only a new entry below.",
+
+  "buffer_rules": [
+    {
+      "id": "assembly",
+      "label": "Assemble at airport",
+      "anchor": "flight_departure",
+      "offset_minutes": -180,
+      "type": "Assembly"
+    },
+    {
+      "id": "checkin",
+      "label": "Check-in opens",
+      "anchor": "flight_departure",
+      "offset_minutes": -150,
+      "type": "Check-in"
+    },
+    {
+      "id": "depart_for_hotel",
+      "label": "Depart for hotel by road",
+      "anchor": "flight_arrival",
+      "offset_minutes": 60,
+      "type": "Road Transfer"
+    }
+  ]
+}
