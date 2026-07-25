@@ -102,6 +102,11 @@ def build_stage1_grid(
     Any computed time that falls outside the plan's date range (e.g. a very short trip
     combined with a long transfer) is clamped to the nearest existing day, with a note
     flagging that it spilled outside the plan dates, rather than silently dropped.
+
+    Also returns "locked_slots": a set of (date, slot_name) pairs that received
+    auto-generated logistics content (arrival, transfers, assembly, check-in, departure).
+    These are meant to never be edited or added to via any Stage 2 activity UI - use
+    compute_addable_slots() to find which cells are actually open for activities.
     """
     num_days = (end_date - start_date).days + 1
     days = []
@@ -113,6 +118,7 @@ def build_stage1_grid(
             "Morning": "", "Afternoon": "", "Evening": "",
         })
     day_dates = [d["date"] for d in days]
+    locked_slots = set()
 
     def add_entry(dt, text):
         target_date = dt.date()
@@ -126,6 +132,7 @@ def build_stage1_grid(
                 existing = day[slot]
                 new_text = text + spilled_note
                 day[slot] = f"{existing}\n{new_text}" if existing else new_text
+                locked_slots.add((target_date, slot))
                 return
 
     def transfer_notes(minutes, window_start_dt, window_end_dt):
@@ -168,4 +175,40 @@ def build_stage1_grid(
 
     add_entry(departure_dt, f"Departure: {departure_airport}, {departure_time.strftime('%H:%M')}")
 
-    return {"plan_name": plan_name, "program_location": program_location, "days": days}
+    return {
+        "plan_name": plan_name, "program_location": program_location,
+        "days": days, "locked_slots": locked_slots,
+    }
+
+
+def compute_addable_slots(days, locked_slots, start_date, end_date, arrival_time, departure_time, time_slots):
+    """
+    Returns the set of (date, slot_name) pairs open for Stage 2 activity addition:
+    - never a slot in locked_slots (auto-generated logistics content - permanently
+      off-limits, per "don't allow removal of already populated data")
+    - on start_date, only slots strictly after the one containing arrival_time
+    - on end_date, only slots strictly before the one containing departure_time
+    - on any day strictly between start_date and end_date, all slots are eligible
+
+    Slots that already have a person-added activity in them (not auto-generated) are
+    still included here - "no removal" doesn't mean "no more than one activity per
+    slot", it just means existing content is never overwritten. The caller appends
+    rather than replaces when writing to an addable slot.
+    """
+    slot_order = [s["name"] for s in time_slots]
+    arrival_slot_idx = slot_order.index(classify_time_slot(arrival_time, time_slots))
+    departure_slot_idx = slot_order.index(classify_time_slot(departure_time, time_slots))
+
+    addable = set()
+    for day in days:
+        if day["date"] < start_date or day["date"] > end_date:
+            continue
+        for slot_idx, slot_name in enumerate(slot_order):
+            if (day["date"], slot_name) in locked_slots:
+                continue
+            if day["date"] == start_date and slot_idx <= arrival_slot_idx:
+                continue
+            if day["date"] == end_date and slot_idx >= departure_slot_idx:
+                continue
+            addable.add((day["date"], slot_name))
+    return addable
