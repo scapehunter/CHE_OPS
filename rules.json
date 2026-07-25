@@ -285,6 +285,21 @@
       ]
     }
   ],
-  "_comment_programs": "Program -> nearest airport(s) + typical one-way travel time from that airport to the program location, in minutes. Sourced from curious_hathi_programs.csv. A program with more than one airport option (e.g. Meghalaya, Kaziranga) just means multiple valid airports serve that location - not a fixed arrival/departure pairing. The person picks whichever applies for arrival and departure independently, and the displayed travel time updates to match."
-}
+  "_comment_programs": "Program -> nearest airport(s) + typical one-way travel time from that airport to the program location, in minutes. Sourced from curious_hathi_programs.csv. A program with more than one airport option (e.g. Meghalaya, Kaziranga) just means multiple valid airports serve that location - not a fixed arrival/departure pairing. The person picks whichever applies for arrival and departure independently, and the displayed travel time updates to match.",
 
+  "meal_rules": [
+    {"name": "Breakfast", "window_start": "07:00", "window_end": "09:00", "duration_minutes": 30},
+    {"name": "Lunch", "window_start": "12:00", "window_end": "14:00", "duration_minutes": 45},
+    {"name": "Snacks", "window_start": "16:00", "window_end": "17:00", "duration_minutes": 20},
+    {"name": "Dinner", "window_start": "19:00", "window_end": "21:00", "duration_minutes": 45}
+  ],
+  "_comment_meal_rules": "Default meal windows and duration. These are general defaults, not fixed - override per-plan or per-day when a program's schedule genuinely needs something different.",
+
+  "transfer_rules": {
+    "washroom_break_threshold_minutes": 120,
+    "washroom_break_note": "A transfer longer than this threshold should include a washroom break.",
+    "meal_overlap_note": "If a transfer overlaps a meal window (see meal_rules), it requires either a meal stop at a pre-identified place, or a packed meal for the group.",
+    "applies_to": ["transfer", "activity"]
+  },
+  "_comment_transfer_rules": "Same overlap logic applies during activities, not just transfers - applies_to lists which kinds of blocks this rule should be checked against once a scheduling stage is built. These are general rules, unless a specific plan/day calls for an exception."
+}
