@@ -1,6 +1,5 @@
 {
   "_comment": "Each rule computes one auto-generated row's time as an offset from a known 'anchor' time. anchor must match a value the itinerary tool actually has for that day (e.g. flight_departure, flight_arrival, hotel_checkin). offset_minutes is negative for 'before anchor', positive for 'after anchor'. Add new rules here as later stages introduce new anchors (e.g. activity_start, dinner_time) - no code changes needed for a new rule, only a new entry below.",
-
   "buffer_rules": [
     {
       "id": "assembly",
@@ -24,10 +23,233 @@
       "type": "Road Transfer"
     }
   ],
-
   "time_slots": [
-    {"name": "Morning", "start": "00:00", "end": "12:00"},
-    {"name": "Afternoon", "start": "12:00", "end": "16:30"},
-    {"name": "Evening", "start": "16:30", "end": "24:00"}
-  ]
+    {
+      "name": "Morning",
+      "start": "00:00",
+      "end": "12:00"
+    },
+    {
+      "name": "Afternoon",
+      "start": "12:00",
+      "end": "16:30"
+    },
+    {
+      "name": "Evening",
+      "start": "16:30",
+      "end": "24:00"
+    }
+  ],
+  "programs": [
+    {
+      "name": "Ladakh",
+      "airports": [
+        {
+          "airport": "Leh",
+          "travel_time_minutes": 20
+        }
+      ]
+    },
+    {
+      "name": "Rishikesh",
+      "airports": [
+        {
+          "airport": "Dehradun",
+          "travel_time_minutes": 90
+        }
+      ]
+    },
+    {
+      "name": "Kumaon Adventure (Nainital)",
+      "airports": [
+        {
+          "airport": "Bareilly",
+          "travel_time_minutes": 240
+        }
+      ]
+    },
+    {
+      "name": "Garhwal Adventure (Kanatal)",
+      "airports": [
+        {
+          "airport": "Dehradun",
+          "travel_time_minutes": 150
+        }
+      ]
+    },
+    {
+      "name": "Ranthambhore",
+      "airports": [
+        {
+          "airport": "Jaipur",
+          "travel_time_minutes": 210
+        }
+      ]
+    },
+    {
+      "name": "Sunderbans",
+      "airports": [
+        {
+          "airport": "Kolkata",
+          "travel_time_minutes": 210
+        }
+      ]
+    },
+    {
+      "name": "Pench",
+      "airports": [
+        {
+          "airport": "Nagpur",
+          "travel_time_minutes": 120
+        }
+      ]
+    },
+    {
+      "name": "Satpura",
+      "airports": [
+        {
+          "airport": "Bhopal",
+          "travel_time_minutes": 180
+        }
+      ]
+    },
+    {
+      "name": "Wayanad",
+      "airports": [
+        {
+          "airport": "Kozhikode",
+          "travel_time_minutes": 210
+        }
+      ]
+    },
+    {
+      "name": "Palk Bay",
+      "airports": [
+        {
+          "airport": "Madurai",
+          "travel_time_minutes": 150
+        }
+      ]
+    },
+    {
+      "name": "Hampi",
+      "airports": [
+        {
+          "airport": "Hubli",
+          "travel_time_minutes": 180
+        }
+      ]
+    },
+    {
+      "name": "Kabini",
+      "airports": [
+        {
+          "airport": "Bangalore",
+          "travel_time_minutes": 270
+        }
+      ]
+    },
+    {
+      "name": "Western Ghats – Outdoor Essentials",
+      "airports": [
+        {
+          "airport": "Pune",
+          "travel_time_minutes": 150
+        },
+        {
+          "airport": "Mumbai",
+          "travel_time_minutes": 180
+        },
+        {
+          "airport": "Navi Mumbai",
+          "travel_time_minutes": 120
+        }
+      ]
+    },
+    {
+      "name": "Goa – Marine Ecosystems",
+      "airports": [
+        {
+          "airport": "Dabolim",
+          "travel_time_minutes": 60
+        },
+        {
+          "airport": "Mopa",
+          "travel_time_minutes": 60
+        }
+      ]
+    },
+    {
+      "name": "Gujrat",
+      "airports": [
+        {
+          "airport": "Ahmedabad",
+          "travel_time_minutes": 45
+        }
+      ]
+    },
+    {
+      "name": "Amboli",
+      "airports": [
+        {
+          "airport": "Goa",
+          "travel_time_minutes": 180
+        }
+      ]
+    },
+    {
+      "name": "Meghalaya",
+      "airports": [
+        {
+          "airport": "Guwahati",
+          "travel_time_minutes": 150
+        },
+        {
+          "airport": "Shillong",
+          "travel_time_minutes": 150
+        }
+      ]
+    },
+    {
+      "name": "Nagaland",
+      "airports": [
+        {
+          "airport": "Dimapur",
+          "travel_time_minutes": 180
+        }
+      ]
+    },
+    {
+      "name": "Kaziranga",
+      "airports": [
+        {
+          "airport": "Guwahati",
+          "travel_time_minutes": 240
+        },
+        {
+          "airport": "Jorhat",
+          "travel_time_minutes": 120
+        }
+      ]
+    },
+    {
+      "name": "Udupi",
+      "airports": [
+        {
+          "airport": "Mangalore",
+          "travel_time_minutes": 120
+        }
+      ]
+    },
+    {
+      "name": "Kanha",
+      "airports": [
+        {
+          "airport": "Raipur",
+          "travel_time_minutes": 240
+        }
+      ]
+    }
+  ],
+  "_comment_programs": "Program -> nearest airport(s) + typical one-way travel time from that airport to the program location, in minutes. Sourced from curious_hathi_programs.csv. A program with more than one airport option (e.g. Meghalaya, Kaziranga) just means multiple valid airports serve that location - not a fixed arrival/departure pairing. The person picks whichever applies for arrival and departure independently, and the displayed travel time updates to match."
 }

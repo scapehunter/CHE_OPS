@@ -12,6 +12,14 @@ def load_rules(path="rules.json"):
         return json.load(f)
 
 
+def get_program(program_name, programs):
+    """Returns the program dict (name + airports list) matching program_name, or None."""
+    for p in programs:
+        if p["name"] == program_name:
+            return p
+    return None
+
+
 def _time_to_minutes(t):
     return t.hour * 60 + t.minute
 
@@ -35,8 +43,8 @@ def classify_time_slot(t, time_slots):
 
 def build_stage1_grid(
     plan_name, start_date, end_date,
-    arrival_airport, arrival_time, arrival_flight_number,
-    departure_airport, departure_time, departure_flight_number,
+    arrival_airport, arrival_time,
+    departure_airport, departure_time,
     program_location, time_slots,
 ):
     """
@@ -52,6 +60,11 @@ def build_stage1_grid(
     Departure entry is placed on end_date, in the slot matching departure_time.
     If start_date == end_date, both entries land on the same day (and the same cell,
     joined on separate lines, if their times fall in the same slot).
+
+    arrival_airport / departure_airport are plain strings - the caller (the page) is
+    responsible for resolving them from the selected Program via get_program(), since a
+    program can have more than one airport option (e.g. Kaziranga via Guwahati inbound,
+    Jorhat outbound).
     """
     num_days = (end_date - start_date).days + 1
     days = []
@@ -72,12 +85,9 @@ def build_stage1_grid(
                 return
 
     entry_time = arrival_time
-    flight_part = f"Flight {arrival_flight_number}, " if arrival_flight_number else ""
-    add_entry(start_date, f"Arrival: {flight_part}{arrival_airport}, {arrival_time.strftime('%H:%M')}")
+    add_entry(start_date, f"Arrival: {arrival_airport}, {arrival_time.strftime('%H:%M')}")
 
     entry_time = departure_time
-    flight_part = f"Flight {departure_flight_number}, " if departure_flight_number else ""
-    add_entry(end_date, f"Departure: {flight_part}{departure_airport}, {departure_time.strftime('%H:%M')}")
+    add_entry(end_date, f"Departure: {departure_airport}, {departure_time.strftime('%H:%M')}")
 
     return {"plan_name": plan_name, "program_location": program_location, "days": days}
-    
