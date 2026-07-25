@@ -1,5 +1,4 @@
 from datetime import date, time
-import html as html_lib
 
 import pandas as pd
 import streamlit as st
@@ -117,27 +116,6 @@ if "stage1_grid" in st.session_state:
     st.subheader(grid["plan_name"] or "(Untitled Plan)")
     st.caption(f"Location: {grid['program_location'] or '—'}")
 
-    def render_table_html(days):
-        rows_html = ""
-        for d in days:
-            cells = "".join(
-                f'<td style="white-space: pre-wrap; vertical-align: top; padding: 8px; border: 1px solid #444;">{html_lib.escape(d[slot])}</td>'
-                for slot in ["Morning", "Afternoon", "Evening"]
-            )
-            rows_html += f'<tr><td style="white-space: pre-wrap; vertical-align: top; padding: 8px; border: 1px solid #444; font-weight: 600;">{html_lib.escape(d["label"])}</td>{cells}</tr>'
-        header = "".join(f'<th style="padding: 8px; border: 1px solid #444;">{h}</th>' for h in ["Day", "Morning", "Afternoon", "Evening"])
-        return f'<table style="width: 100%; border-collapse: collapse;"><thead><tr>{header}</tr></thead><tbody>{rows_html}</tbody></table>'
-
-    st.markdown(render_table_html(grid["days"]), unsafe_allow_html=True)
-
-    st.divider()
-    st.subheader("Stage 2: Add Activities")
-    st.caption(
-        "Click ➕ on an open slot to add an activity there. Slots already used for arrival, "
-        "transfer, assembly, check-in, or departure are locked and can't be edited or "
-        "overwritten - only genuinely open slots, after arrival and before departure, show a button."
-    )
-
     boundary = st.session_state["stage1_boundary"]
     addable = compute_addable_slots(
         grid["days"], grid["locked_slots"],
@@ -172,19 +150,35 @@ if "stage1_grid" in st.session_state:
                         break
                 st.rerun()
 
+    # Header row
+    header_cols = st.columns([1.3, 1, 1, 1])
+    for col, label in zip(header_cols, ["Day", "Morning", "Afternoon", "Evening"]):
+        col.markdown(f"**{label}**")
+
     for d in grid["days"]:
-        st.write(f"**{d['label']}**")
-        cols = st.columns(3)
-        for col, slot_name in zip(cols, ["Morning", "Afternoon", "Evening"]):
+        row_cols = st.columns([1.3, 1, 1, 1], border=True)
+        row_cols[0].markdown(f"**{d['label']}**")
+
+        for col, slot_name in zip(row_cols[1:], ["Morning", "Afternoon", "Evening"]):
+            key = (d["date"], slot_name)
+            content = d[slot_name]
             with col:
-                key = (d["date"], slot_name)
+                if content:
+                    # Markdown hard line break (trailing double space) so multi-entry
+                    # cells (e.g. two stacked activities) wrap and break lines correctly.
+                    st.markdown(content.replace("\n", "  \n"))
                 if key in grid["locked_slots"]:
-                    st.caption(f"🔒 {slot_name} (locked)")
-                elif key not in addable:
-                    st.caption(f"— {slot_name} (outside plan window)")
-                else:
-                    if st.button(f"➕ {slot_name}", key=f"add_{d['date']}_{slot_name}"):
+                    st.caption("🔒 locked")
+                elif key in addable:
+                    if st.button("➕ Add", key=f"add_{d['date']}_{slot_name}"):
                         add_activity_dialog(d["label"], d["date"], slot_name)
+                elif not content:
+                    st.caption("—")
+
+    st.caption(
+        "🔒 = arrival/transfer/assembly/check-in/departure, locked and never editable. "
+        "➕ = open for activities. Regenerating the plan above resets everything, including added activities."
+    )
 
     df = pd.DataFrame([
         {"Day": d["label"], "Morning": d["Morning"], "Afternoon": d["Afternoon"], "Evening": d["Evening"]}
