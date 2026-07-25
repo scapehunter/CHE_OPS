@@ -13,6 +13,11 @@ st.page_link(
     label="🎫 Ticket Extractor",
     help="Extract passenger, PNR, sector, and flight details from PDF tickets",
 )
+st.page_link(
+    "pages/compare_datasets.py",
+    label="🔍 Compare Datasets",
+    help="Match two CSV/Excel files on a common column and spot differences",
+)
 
 # Add a link for each new tool here as you build it, e.g.:
 # st.page_link("pages/another_tool.py", label="🛠️ Another Tool", help="...")
