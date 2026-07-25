@@ -92,3 +92,4 @@ def build_stage1_grid(
 
     return {"plan_name": plan_name, "program_location": program_location, "days": days}
 
+    

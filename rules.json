@@ -60,7 +60,7 @@
       ]
     },
     {
-      "name": "Kumaon Adventure (Nainital)",
+      "name": "Nainital",
       "airports": [
         {
           "airport": "Bareilly",
@@ -69,11 +69,28 @@
       ]
     },
     {
-      "name": "Garhwal Adventure (Kanatal)",
+      "name": "Kanatal",
       "airports": [
         {
           "airport": "Dehradun",
           "travel_time_minutes": 150
+        }
+      ]
+    },
+    {
+      "name": "Karjat",
+      "airports": [
+        {
+          "airport": "Pune",
+          "travel_time_minutes": 180
+        },
+        {
+          "airport": "Mumbai",
+          "travel_time_minutes": 120
+        },
+        {
+          "airport": "Navi Mumbai",
+          "travel_time_minutes": 60
         }
       ]
     },
@@ -123,7 +140,7 @@
       ]
     },
     {
-      "name": "Palk Bay",
+      "name": "Palk Bay ( Raneshwaram)",
       "airports": [
         {
           "airport": "Madurai",
@@ -150,7 +167,7 @@
       ]
     },
     {
-      "name": "Western Ghats – Outdoor Essentials",
+      "name": "Lonawala",
       "airports": [
         {
           "airport": "Pune",
@@ -167,7 +184,24 @@
       ]
     },
     {
-      "name": "Goa – Marine Ecosystems",
+      "name": "Khandala",
+      "airports": [
+        {
+          "airport": "Pune",
+          "travel_time_minutes": 150
+        },
+        {
+          "airport": "Mumbai",
+          "travel_time_minutes": 180
+        },
+        {
+          "airport": "Navi Mumbai",
+          "travel_time_minutes": 120
+        }
+      ]
+    },
+    {
+      "name": "Goa",
       "airports": [
         {
           "airport": "Dabolim",

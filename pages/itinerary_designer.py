@@ -56,11 +56,9 @@ with st.form("stage1_form"):
     st.divider()
     col_arrival, col_departure = st.columns(2)
     with col_arrival:
-        st.subheader("Arrival")
-        arrival_time = st.time_input("Expected Arrival Time *", value=time(11, 30))
+        arrival_time = st.time_input("Expected Flight Arrival Time *", value=time(11, 30))
     with col_departure:
-        st.subheader("Departure")
-        departure_time = st.time_input("Expected Departure Time *", value=time(16, 0))
+        departure_time = st.time_input("Expected Flight Departure Time *", value=time(16, 0))
 
     st.caption("* Mandatory fields")
     submitted = st.form_submit_button("Generate Plan Grid")
@@ -78,9 +76,9 @@ if submitted:
     if not end_date:
         missing.append("End Date")
     if not arrival_time:
-        missing.append("Expected Arrival Time")
+        missing.append("Expected Flight Arrival Time")
     if not departure_time:
-        missing.append("Expected Departure Time")
+        missing.append("Expected Flight Departure Time")
 
     if missing:
         st.error("Missing mandatory field(s): " + ", ".join(missing))
