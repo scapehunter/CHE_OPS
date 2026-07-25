@@ -212,3 +212,4 @@ def compute_addable_slots(days, locked_slots, start_date, end_date, arrival_time
                 continue
             addable.add((day["date"], slot_name))
     return addable
+    
