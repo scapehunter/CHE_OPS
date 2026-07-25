@@ -92,9 +92,14 @@ if submitted:
         plan_name=plan_name,
         start_date=start_date, end_date=end_date,
         arrival_airport=arrival_airport, arrival_time=arrival_time,
+        arrival_travel_minutes=airport_by_name[arrival_airport],
         departure_airport=departure_airport, departure_time=departure_time,
+        departure_travel_minutes=airport_by_name[departure_airport],
         program_location=program_location,
         time_slots=time_slots,
+        buffer_rules=rules_data["buffer_rules"],
+        transfer_rules=rules_data["transfer_rules"],
+        meal_rules=rules_data["meal_rules"],
     )
 
     st.subheader(grid["plan_name"] or "(Untitled Plan)")
@@ -108,5 +113,3 @@ if submitted:
 
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("Download as CSV", csv, "plan_grid.csv", "text/csv")
-
-    
