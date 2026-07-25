@@ -1,91 +1,82 @@
 """
-Stage 1 itinerary logic: travel-day (assembly -> flight -> road transfer -> hotel)
-row generation. Kept free of any Streamlit imports so the date/time math can be
-tested directly.
+Stage 1 itinerary logic: builds a Day x (Morning/Afternoon/Evening) grid for the whole
+plan duration, with the arrival and departure entries auto-placed into the correct day
+and time slot. Kept free of any Streamlit imports so this can be tested directly.
 """
 import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 
 def load_rules(path="rules.json"):
     with open(path) as f:
-        data = json.load(f)
-    return data["buffer_rules"]
+        return json.load(f)
 
 
-def _apply_rule(rule, anchors):
-    anchor_time = anchors.get(rule["anchor"])
-    if anchor_time is None:
-        return None
-    return anchor_time + timedelta(minutes=rule["offset_minutes"])
+def _time_to_minutes(t):
+    return t.hour * 60 + t.minute
 
 
-def build_stage1_itinerary(
-    trip_date, flight_departure_time, flight_arrival_time,
-    flight_number, destination_airport, hotel_location,
-    transfer_duration_minutes, rules, transfer_distance_km=None,
+def classify_time_slot(t, time_slots):
+    """Returns the slot name (e.g. 'Morning') that time t falls into, per the
+    time_slots definition from rules.json. 'end': '24:00' is treated as end-of-day."""
+    minutes = _time_to_minutes(t)
+    for slot in time_slots:
+        start_h, start_m = map(int, slot["start"].split(":"))
+        start_minutes = start_h * 60 + start_m
+        if slot["end"] == "24:00":
+            end_minutes = 24 * 60
+        else:
+            end_h, end_m = map(int, slot["end"].split(":"))
+            end_minutes = end_h * 60 + end_m
+        if start_minutes <= minutes < end_minutes:
+            return slot["name"]
+    return time_slots[-1]["name"] if time_slots else "Unknown"
+
+
+def build_stage1_grid(
+    plan_name, start_date, end_date,
+    arrival_airport, arrival_time, arrival_flight_number,
+    departure_airport, departure_time, departure_flight_number,
+    program_location, time_slots,
 ):
     """
-    trip_date: date
-    flight_departure_time, flight_arrival_time: time (both assumed same trip_date;
-        if arrival clock-time is earlier than departure, it's treated as landing the
-        next day - a simple way to handle overnight flights without a separate input)
-    transfer_duration_minutes: int - the road-transfer duration, as entered by the person.
-    transfer_distance_km: optional, purely informational - included in the Notes column
-        if given, has no effect on the computed times.
-    rules: list of rule dicts as loaded from rules.json
-
-    Returns a list of row dicts with keys: Date, Time, Activity, Type, Notes,
-    already sorted into chronological order.
+    Returns a dict:
+      {
+        "plan_name": ..., "program_location": ...,
+        "days": [
+          {"label": "Day 1 (17 Feb 2025)", "date": date, "Morning": "...", "Afternoon": "...", "Evening": "..."},
+          ...
+        ]
+      }
+    Arrival entry is placed on start_date, in the slot matching arrival_time.
+    Departure entry is placed on end_date, in the slot matching departure_time.
+    If start_date == end_date, both entries land on the same day (and the same cell,
+    joined on separate lines, if their times fall in the same slot).
     """
-    departure_dt = datetime.combine(trip_date, flight_departure_time)
-    arrival_dt = datetime.combine(trip_date, flight_arrival_time)
-    if arrival_dt < departure_dt:
-        arrival_dt += timedelta(days=1)
+    num_days = (end_date - start_date).days + 1
+    days = []
+    for i in range(num_days):
+        day_date = start_date + timedelta(days=i)
+        days.append({
+            "label": f"Day {i + 1} ({day_date.strftime('%d %b %Y')})",
+            "date": day_date,
+            "Morning": "", "Afternoon": "", "Evening": "",
+        })
 
-    anchors = {"flight_departure": departure_dt, "flight_arrival": arrival_dt}
+    def add_entry(target_date, text):
+        for day in days:
+            if day["date"] == target_date:
+                slot = classify_time_slot(entry_time, time_slots)
+                existing = day[slot]
+                day[slot] = f"{existing}\n{text}" if existing else text
+                return
 
-    rows = []
-    transfer_start = None
-    for rule in rules:
-        t = _apply_rule(rule, anchors)
-        if t is None:
-            continue
-        rows.append({"_dt": t, "Activity": rule["label"], "Type": rule["type"], "Notes": ""})
-        if rule["id"] == "depart_for_hotel":
-            transfer_start = t
+    entry_time = arrival_time
+    flight_part = f"Flight {arrival_flight_number}, " if arrival_flight_number else ""
+    add_entry(start_date, f"Arrival: {flight_part}{arrival_airport}, {arrival_time.strftime('%H:%M')}")
 
-    rows.append({
-        "_dt": departure_dt,
-        "Activity": f"Board flight {flight_number} to {destination_airport}",
-        "Type": "Flight", "Notes": "",
-    })
-    rows.append({
-        "_dt": arrival_dt,
-        "Activity": f"Arrival at {destination_airport}",
-        "Type": "Arrival", "Notes": "",
-    })
+    entry_time = departure_time
+    flight_part = f"Flight {departure_flight_number}, " if departure_flight_number else ""
+    add_entry(end_date, f"Departure: {flight_part}{departure_airport}, {departure_time.strftime('%H:%M')}")
 
-    if transfer_start is None:
-        # No "depart_for_hotel" rule found in rules.json - fall back to a 60-minute
-        # post-arrival buffer so the itinerary can still be built.
-        transfer_start = arrival_dt + timedelta(minutes=60)
-
-    hotel_arrival_dt = transfer_start + timedelta(minutes=transfer_duration_minutes)
-    note = f"Road transfer ~{transfer_duration_minutes} min"
-    if transfer_distance_km is not None:
-        note += f" (~{transfer_distance_km} km)"
-    rows.append({
-        "_dt": hotel_arrival_dt,
-        "Activity": f"Arrival at {hotel_location}",
-        "Type": "Hotel Check-in",
-        "Notes": note,
-    })
-
-    rows.sort(key=lambda r: r["_dt"])
-    for r in rows:
-        r["Date"] = r["_dt"].strftime("%d %b %Y")
-        r["Time"] = r["_dt"].strftime("%H:%M")
-        del r["_dt"]
-
-    return rows
+    return {"plan_name": plan_name, "program_location": program_location, "days": days}

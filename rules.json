@@ -23,5 +23,11 @@
       "offset_minutes": 60,
       "type": "Road Transfer"
     }
+  ],
+
+  "time_slots": [
+    {"name": "Morning", "start": "00:00", "end": "12:00"},
+    {"name": "Afternoon", "start": "12:00", "end": "16:30"},
+    {"name": "Evening", "start": "16:30", "end": "24:00"}
   ]
 }
