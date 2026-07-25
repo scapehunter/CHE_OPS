@@ -113,6 +113,7 @@ if submitted:
     }
     st.session_state["stage2_activities"] = []
     st.session_state.pop("stage3_df", None)
+    st.session_state.pop("stage3_editor", None)
 
 if "stage1_grid" in st.session_state:
     grid = st.session_state["stage1_grid"]
@@ -224,6 +225,7 @@ if "stage1_grid" in st.session_state:
                 meal_rules, rules_data["default_slot_starts"],
             )
             st.session_state["stage3_df"] = pd.DataFrame(rows)
+            st.session_state.pop("stage3_editor", None)
 
     if "stage3_df" in st.session_state:
         st.subheader("Stage 3: Timewise Itinerary")
@@ -293,6 +295,14 @@ if "stage1_grid" in st.session_state:
             )
             working = working.sort_values("_sort_key").drop(columns="_sort_key").reset_index(drop=True)
             st.session_state["stage3_df"] = working
+            # st.data_editor tracks edits as a diff against whatever dataframe it first
+            # bound to under this key - just passing it a freshly re-sorted dataframe on
+            # the next run doesn't reliably override that (a newly inserted row would
+            # otherwise stay visually stuck at the bottom, in raw insertion order,
+            # regardless of its Date/Time). Clearing the widget's own state forces it to
+            # rebind fresh to the corrected order instead of resolving against its stale
+            # internal baseline.
+            st.session_state.pop("stage3_editor", None)
             st.rerun()
         else:
             st.session_state["stage3_df"] = edited_df
