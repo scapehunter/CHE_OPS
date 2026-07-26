@@ -406,10 +406,16 @@ if "stage1_grid" in st.session_state:
                             }
 
                         group_shifts = compute_cascade_shifts(existing_groups, anchor_minutes, end_minutes)
-                        if group_shifts:
-                            st.session_state[pending_key] = {"group_shifts": group_shifts, "activity": name}
-                        else:
-                            st.session_state.pop(pending_key, None)
+                        # Applied immediately, not stored as a pending action - inserting
+                        # a row always leaves the day's table internally consistent on
+                        # its own, no separate confirmation click needed.
+                        for row_idx in df2.index:
+                            gid = df2.loc[row_idx, "_group"]
+                            if gid in group_shifts:
+                                t = _parse_time_safe(df2.loc[row_idx, "Time"])
+                                if t is not None:
+                                    shifted = max(0, min(23 * 60 + 59, t + group_shifts[gid]))
+                                    df2.loc[row_idx, "Time"] = f"{shifted // 60:02d}:{shifted % 60:02d}"
 
                         combined = pd.concat([df2, new_rows_formatted], ignore_index=True)
                         combined["_sort_key"] = combined["Time"].apply(_parse_time_safe)
@@ -476,7 +482,7 @@ if "stage1_grid" in st.session_state:
 
             col_apply, col_dismiss = st.columns([1, 1])
             with col_apply:
-                if st.button("⏩ Apply shift to later rows", key=f"apply_{date_iso}"):
+                if st.button("⏩ Time check and Adjust", key=f"apply_{date_iso}"):
                     if pending:
                         df3 = st.session_state["stage3_dfs"][date_iso].copy()
                         if "group_shifts" in pending:
@@ -562,5 +568,3 @@ if "stage1_grid" in st.session_state:
                 "📥 Download Combined Timewise Itinerary (all days)",
                 combined_csv, "timewise_itinerary_combined.csv", "text/csv",
             )
-
-            

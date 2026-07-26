@@ -475,5 +475,4 @@ def compute_cascade_shifts(existing_groups, new_start_minutes, new_end_minutes):
         floor = new_group_start + duration
 
     return shifts
-
     
