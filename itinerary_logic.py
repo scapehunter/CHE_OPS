@@ -7,7 +7,7 @@ directly.
 """
 import json
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 
 def load_rules(path="rules.json"):
@@ -486,3 +486,62 @@ def compute_cascade_shifts(existing_groups, new_start_minutes, new_end_minutes, 
         floor = new_group_start + duration
 
     return shifts
+
+
+def fill_missing_meals(stage2_activities, meal_rules, days, arrival_dt, departure_dt, time_slots):
+    """
+    Returns a new stage2_activities list with a synthetic Meal entry added for every
+    (day, meal) combination that doesn't already have that meal present - so every day
+    of the plan ends up with all of meal_rules' meals by default, unless a meal's
+    entire window falls before the trip's actual arrival time (on the first day) or
+    after its departure time (on the last day), in which case it's skipped as
+    genuinely impossible rather than forced into an awkward placement.
+
+    Each filled-in meal is placed using the same window-average anchor and slot
+    classification the rest of the system already uses for a manually-added meal, so
+    it behaves identically to one a person added themselves in every other respect
+    (window snapping, overlap notes, cascade eligibility).
+
+    Auto-filled meals get order=0 - the same tier as Stage 1's own auto-generated
+    events (baseline/already-expected content) - so a genuine, explicitly later Stage 2
+    addition still takes insertion-order priority over them in a cascade.
+    """
+    existing_meals_by_day = defaultdict(set)
+    for a in stage2_activities:
+        if a["kind"] == "Meal":
+            existing_meals_by_day[a["date"]].add(a["name"])
+
+    start_date = arrival_dt.date()
+    end_date = departure_dt.date()
+    arrival_minutes = arrival_dt.hour * 60 + arrival_dt.minute
+    departure_minutes = departure_dt.hour * 60 + departure_dt.minute
+
+    augmented = list(stage2_activities)
+    for day in days:
+        day_date = day["date"]
+        already = existing_meals_by_day.get(day_date, set())
+        for meal in meal_rules:
+            if meal["name"] in already:
+                continue
+
+            window_start_minutes = _parse_hhmm(meal["window_start"])
+            window_end_minutes = _parse_hhmm(meal["window_end"])
+
+            if day_date == start_date and window_end_minutes <= arrival_minutes:
+                continue  # meal's whole window is before arrival - genuinely impossible
+            if day_date == end_date and window_start_minutes >= departure_minutes:
+                continue  # meal's whole window is after departure - genuinely impossible
+
+            average_minutes = (window_start_minutes + window_end_minutes) // 2
+            avg_time = time(average_minutes // 60, average_minutes % 60)
+            slot = classify_time_slot(avg_time, time_slots)
+
+            augmented.append({
+                "date": day_date, "slot": slot, "order": 0,
+                "kind": "Meal", "name": meal["name"],
+                "duration_minutes": meal["duration_minutes"],
+                "transfer_required": False, "transfer_minutes": None,
+                "meal_stop_required": False, "meal_stop_minutes": None,
+            })
+
+    return augmented

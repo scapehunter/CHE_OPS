@@ -5,7 +5,7 @@ import streamlit as st
 
 from itinerary_logic import (
     build_stage1_grid, build_stage3_timeline, compute_addable_slots, compute_cascade_shifts,
-    expand_activity_or_meal, get_program, load_rules,
+    expand_activity_or_meal, fill_missing_meals, get_program, load_rules,
 )
 
 st.title("🗺️ Itinerary Designer")
@@ -249,8 +249,14 @@ if "stage1_grid" in st.session_state:
         elif not accommodation_details:
             st.error("Accommodation Details is required before generating the timewise itinerary.")
         else:
+            arrival_dt = datetime.combine(boundary["start_date"], boundary["arrival_time"])
+            departure_dt = datetime.combine(boundary["end_date"], boundary["departure_time"])
+            stage2_with_meals = fill_missing_meals(
+                st.session_state.get("stage2_activities", []),
+                meal_rules, grid["days"], arrival_dt, departure_dt, time_slots,
+            )
             rows = build_stage3_timeline(
-                grid["timed_events"], st.session_state.get("stage2_activities", []),
+                grid["timed_events"], stage2_with_meals,
                 meal_rules, rules_data["default_slot_starts"],
                 accommodation_details=accommodation_details,
             )
