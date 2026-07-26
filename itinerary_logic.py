@@ -328,17 +328,18 @@ def expand_activity_or_meal(
         if kind == "Activity" and meal_stop_required and meal_stop_minutes:
             transfer_note = f"Includes {meal_stop_minutes} min meal stop"
         rows.append({"dt": transfer_to_dt, "Activity": f"Transfer to {name}", "Type": "Road Transfer", "Notes": transfer_note})
-        rows.append({"dt": start_dt, "Activity": f"Arrival at {name}", "Type": "Road Transfer", "Notes": note})
+        rows.append({"dt": start_dt, "Activity": f"{name} starts", "Type": kind, "Notes": note})
         finished_dt = start_dt + timedelta(minutes=duration_minutes)
-        rows.append({"dt": finished_dt, "Activity": f"{name} finished", "Type": kind, "Notes": ""})
+        rows.append({"dt": finished_dt, "Activity": f"{name} ends", "Type": kind, "Notes": ""})
         transfer_back_dt = finished_dt
         rows.append({"dt": transfer_back_dt, "Activity": f"Transfer back to {accommodation_label}", "Type": "Road Transfer", "Notes": transfer_note})
         arrival_back_dt = transfer_back_dt + timedelta(minutes=effective_transfer_minutes)
         rows.append({"dt": arrival_back_dt, "Activity": f"Arrival at {accommodation_label}", "Type": "Road Transfer", "Notes": ""})
         end_dt = arrival_back_dt
     else:
-        rows.append({"dt": start_dt, "Activity": name, "Type": kind, "Notes": note})
+        rows.append({"dt": start_dt, "Activity": f"{name} starts", "Type": kind, "Notes": note})
         end_dt = start_dt + timedelta(minutes=duration_minutes)
+        rows.append({"dt": end_dt, "Activity": f"{name} ends", "Type": kind, "Notes": ""})
 
     return rows, end_dt
 

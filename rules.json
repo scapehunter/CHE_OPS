@@ -580,4 +580,3 @@
   },
   "_comment_coordinates": "Lat/long reference data for programs and their airports. Confidence varies per destination - see the confidence field: \"verified\" means checked against a live source, \"high\" means a well-established town/city center, \"moderate\" or \"approximate\" means a best-effort estimate for a specific gate/jetty that has no single commonly-published coordinate (e.g. Mukki Gate, Godkhali) - treat those as reasonable but not precise, especially for anything distance-sensitive."
 }
-

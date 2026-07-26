@@ -366,11 +366,43 @@ if "stage1_grid" in st.session_state:
                         )
                         new_rows_formatted = pd.DataFrame([
                             {"Time": r["dt"].strftime("%H:%M"), "Activity": r["Activity"],
-                             "Type": r["Type"], "Notes": r["Notes"], "_is_new": True}
+                             "Type": r["Type"], "Notes": r["Notes"]}
                             for r in new_rows
                         ])
+
                         df2 = st.session_state["stage3_dfs"][date_iso].copy()
-                        df2["_is_new"] = False
+                        anchor_minutes = parsed_time.hour * 60 + parsed_time.minute
+                        end_minutes = end_dt.hour * 60 + end_dt.minute
+
+                        # Detect the conflict using ONLY the pre-existing rows, before
+                        # merging - an existing row that falls chronologically inside the
+                        # new activity's span (e.g. a Stage 1 transfer at 12:30, when the
+                        # new activity runs 12:00-13:00) would otherwise get sorted in
+                        # between the new activity's own start/end rows, where a
+                        # position-based "check what's immediately after" never sees it.
+                        existing_candidates = [
+                            (idx, _parse_time_safe(df2.loc[idx, "Time"])) for idx in df2.index
+                        ]
+                        existing_candidates = [
+                            (idx, t) for idx, t in existing_candidates
+                            if t is not None and t >= anchor_minutes
+                        ]
+                        if existing_candidates:
+                            earliest_t = min(t for _, t in existing_candidates)
+                            if earliest_t < end_minutes:
+                                st.session_state[pending_key] = {
+                                    "threshold_minutes": anchor_minutes,
+                                    "delta": end_minutes - earliest_t,
+                                    "exclude_keys": list(zip(
+                                        new_rows_formatted["Time"], new_rows_formatted["Activity"]
+                                    )),
+                                    "activity": name,
+                                }
+                            else:
+                                st.session_state.pop(pending_key, None)
+                        else:
+                            st.session_state.pop(pending_key, None)
+
                         combined = pd.concat([df2, new_rows_formatted], ignore_index=True)
                         combined["_sort_key"] = combined["Time"].apply(_parse_time_safe)
                         # Rows with an unparseable time (shouldn't normally happen here,
@@ -378,26 +410,6 @@ if "stage1_grid" in st.session_state:
                         # than crashing or silently vanishing.
                         combined["_sort_key"] = combined["_sort_key"].fillna(24 * 60)
                         combined = combined.sort_values("_sort_key", kind="stable").drop(columns="_sort_key").reset_index(drop=True)
-
-                        # If the inserted activity's end time runs into whatever row comes
-                        # right after it, offer (via the same Apply-shift control used for
-                        # edits) to push the rest of the day forward by the overlap amount -
-                        # doesn't auto-apply, just makes the option available.
-                        new_indices = combined.index[combined["_is_new"]].tolist()
-                        combined = combined.drop(columns="_is_new")
-                        if new_indices:
-                            last_new_idx = new_indices[-1]
-                            next_idx = last_new_idx + 1
-                            end_minutes = end_dt.hour * 60 + end_dt.minute
-                            next_time = _parse_time_safe(combined.loc[next_idx, "Time"]) if next_idx < len(combined) else None
-                            if next_time is not None and end_minutes > next_time:
-                                st.session_state[pending_key] = {
-                                    "row_index": last_new_idx,
-                                    "delta": end_minutes - next_time,
-                                    "activity": name,
-                                }
-                            else:
-                                st.session_state.pop(pending_key, None)
 
                         st.session_state["stage3_dfs"][date_iso] = combined
                         st.session_state.pop(editor_key, None)
@@ -443,17 +455,42 @@ if "stage1_grid" in st.session_state:
             with col_apply:
                 if st.button("⏩ Apply shift to later rows", key=f"apply_{date_iso}"):
                     if pending:
-                        df3 = st.session_state["stage3_dfs"][date_iso]
-                        row_idx = pending["row_index"]
+                        df3 = st.session_state["stage3_dfs"][date_iso].copy()
                         delta = pending["delta"]
-                        for j in df3.index:
-                            if j <= row_idx:
-                                continue
-                            t = _parse_time_safe(df3.loc[j, "Time"])
-                            if t is None:
-                                continue
-                            shifted = max(0, min(23 * 60 + 59, t + delta))
-                            df3.loc[j, "Time"] = f"{shifted // 60:02d}:{shifted % 60:02d}"
+                        if "threshold_minutes" in pending:
+                            # From an insert: shift every row at/after the new activity's
+                            # start time, EXCEPT the newly inserted rows themselves
+                            # (identified by their exact Time+Activity, since this table
+                            # has no persistent row IDs to match on more precisely).
+                            threshold = pending["threshold_minutes"]
+                            exclude_keys = {tuple(k) for k in pending.get("exclude_keys", [])}
+                            for j in df3.index:
+                                t = _parse_time_safe(df3.loc[j, "Time"])
+                                if t is None or t < threshold:
+                                    continue
+                                if (df3.loc[j, "Time"], df3.loc[j, "Activity"]) in exclude_keys:
+                                    continue
+                                shifted = max(0, min(23 * 60 + 59, t + delta))
+                                df3.loc[j, "Time"] = f"{shifted // 60:02d}:{shifted % 60:02d}"
+                        else:
+                            # From an edit: shift every row positioned after the edited one.
+                            row_idx = pending["row_index"]
+                            for j in df3.index:
+                                if j <= row_idx:
+                                    continue
+                                t = _parse_time_safe(df3.loc[j, "Time"])
+                                if t is None:
+                                    continue
+                                shifted = max(0, min(23 * 60 + 59, t + delta))
+                                df3.loc[j, "Time"] = f"{shifted // 60:02d}:{shifted % 60:02d}"
+                        # Re-sort so display order stays chronologically correct - a shift
+                        # can otherwise leave rows visually out of order even though every
+                        # individual time is right (e.g. a shifted row now sitting later
+                        # than a row that was originally after it but wasn't shifted).
+                        df3["_sort_key"] = df3["Time"].apply(_parse_time_safe)
+                        df3["_sort_key"] = df3["_sort_key"].fillna(24 * 60)
+                        df3 = df3.sort_values("_sort_key", kind="stable").drop(columns="_sort_key").reset_index(drop=True)
+
                         st.session_state["stage3_dfs"][date_iso] = df3
                         st.session_state.pop(pending_key, None)
                         st.session_state.pop(editor_key, None)
@@ -487,3 +524,5 @@ if "stage1_grid" in st.session_state:
                 "📥 Download Combined Timewise Itinerary (all days)",
                 combined_csv, "timewise_itinerary_combined.csv", "text/csv",
             )
+
+            
