@@ -37,6 +37,13 @@
       "type": "Briefing"
     },
     {
+      "id": "room_allocation",
+      "label": "Room Allocation",
+      "anchor": "hotel_arrival",
+      "offset_minutes": 30,
+      "type": "Room Allocation"
+    },
+    {
       "id": "bags_assembly",
       "label": "Assembly with bags ready for loading",
       "anchor": "depart_for_airport",
@@ -68,7 +75,11 @@
       "end": "24:00"
     }
   ],
-  "default_slot_starts": {"Morning": "09:00", "Afternoon": "14:00", "Evening": "17:00"},
+  "default_slot_starts": {
+    "Morning": "09:00",
+    "Afternoon": "14:00",
+    "Evening": "17:00"
+  },
   "_comment_default_slot_starts": "Assumed start time for Stage 2 activities/meals when generating the Stage 3 timewise itinerary, roughly anchored to 'after the previous meal window closes' (09:00 after breakfast, 14:00 after lunch, 17:00 after snacks). This is an assumption, not something stated explicitly - adjust freely, no code change needed.",
   "programs": [
     {
@@ -316,21 +327,256 @@
     }
   ],
   "_comment_programs": "Program -> nearest airport(s) + typical one-way travel time from that airport to the program location, in minutes. Sourced from curious_hathi_programs.csv. A program with more than one airport option (e.g. Meghalaya, Kaziranga) just means multiple valid airports serve that location - not a fixed arrival/departure pairing. The person picks whichever applies for arrival and departure independently, and the displayed travel time updates to match.",
-
   "meal_rules": [
-    {"name": "Breakfast", "window_start": "07:00", "window_end": "09:00", "duration_minutes": 30},
-    {"name": "Lunch", "window_start": "12:00", "window_end": "14:00", "duration_minutes": 45},
-    {"name": "Snacks", "window_start": "16:00", "window_end": "17:00", "duration_minutes": 20},
-    {"name": "Dinner", "window_start": "19:00", "window_end": "21:00", "duration_minutes": 45}
+    {
+      "name": "Breakfast",
+      "window_start": "07:00",
+      "window_end": "09:00",
+      "duration_minutes": 30
+    },
+    {
+      "name": "Lunch",
+      "window_start": "12:00",
+      "window_end": "14:00",
+      "duration_minutes": 45
+    },
+    {
+      "name": "Snacks",
+      "window_start": "16:00",
+      "window_end": "17:00",
+      "duration_minutes": 20
+    },
+    {
+      "name": "Dinner",
+      "window_start": "19:00",
+      "window_end": "21:00",
+      "duration_minutes": 45
+    }
   ],
   "_comment_meal_rules": "Default meal windows and duration. These are general defaults, not fixed - override per-plan or per-day when a program's schedule genuinely needs something different.",
-
   "transfer_rules": {
     "washroom_break_threshold_minutes": 120,
     "washroom_break_minutes": 20,
     "washroom_break_note": "A transfer longer than this threshold should include a washroom break; washroom_break_minutes is added to the transfer duration itself, not just noted.",
     "meal_overlap_note": "If a transfer overlaps a meal window (see meal_rules), it requires either a meal stop at a pre-identified place, or a packed meal for the group.",
-    "applies_to": ["transfer", "activity"]
+    "applies_to": [
+      "transfer",
+      "activity"
+    ]
   },
-  "_comment_transfer_rules": "Same overlap logic applies during activities, not just transfers - applies_to lists which kinds of blocks this rule should be checked against once a scheduling stage is built. These are general rules, unless a specific plan/day calls for an exception."
+  "_comment_transfer_rules": "Same overlap logic applies during activities, not just transfers - applies_to lists which kinds of blocks this rule should be checked against once a scheduling stage is built. These are general rules, unless a specific plan/day calls for an exception.",
+  "coordinates": {
+    "airports": {
+      "Leh": {
+        "lat": 34.1359,
+        "lon": 77.5465
+      },
+      "Dehradun": {
+        "lat": 30.1897,
+        "lon": 78.1804
+      },
+      "Bareilly": {
+        "lat": 28.4212,
+        "lon": 79.4506
+      },
+      "Pune": {
+        "lat": 18.5822,
+        "lon": 73.9197
+      },
+      "Mumbai": {
+        "lat": 19.0896,
+        "lon": 72.8656
+      },
+      "Navi Mumbai": {
+        "lat": 18.9919,
+        "lon": 73.0617
+      },
+      "Jaipur": {
+        "lat": 26.8242,
+        "lon": 75.8122
+      },
+      "Kolkata": {
+        "lat": 22.6547,
+        "lon": 88.4467
+      },
+      "Nagpur": {
+        "lat": 21.0922,
+        "lon": 79.0472
+      },
+      "Bhopal": {
+        "lat": 23.2875,
+        "lon": 77.3374
+      },
+      "Kozhikode": {
+        "lat": 11.1367,
+        "lon": 75.9553
+      },
+      "Madurai": {
+        "lat": 9.8345,
+        "lon": 78.0934
+      },
+      "Hubli": {
+        "lat": 15.3617,
+        "lon": 75.0849
+      },
+      "Bangalore": {
+        "lat": 13.1986,
+        "lon": 77.7066
+      },
+      "Dabolim": {
+        "lat": 15.3808,
+        "lon": 73.8314
+      },
+      "Mopa": {
+        "lat": 15.7397,
+        "lon": 73.8875
+      },
+      "Ahmedabad": {
+        "lat": 23.0772,
+        "lon": 72.6347
+      },
+      "Guwahati": {
+        "lat": 26.1061,
+        "lon": 91.5859
+      },
+      "Shillong": {
+        "lat": 25.7036,
+        "lon": 91.9787
+      },
+      "Dimapur": {
+        "lat": 25.8838,
+        "lon": 93.7712
+      },
+      "Jorhat": {
+        "lat": 26.7315,
+        "lon": 94.1755
+      },
+      "Mangalore": {
+        "lat": 12.9613,
+        "lon": 74.89
+      },
+      "Raipur": {
+        "lat": 21.1804,
+        "lon": 81.7388
+      }
+    },
+    "destinations": {
+      "Ladakh": {
+        "lat": 34.1526,
+        "lon": 77.5771,
+        "confidence": "high"
+      },
+      "Rishikesh": {
+        "lat": 30.0869,
+        "lon": 78.2676,
+        "confidence": "high"
+      },
+      "Nainital": {
+        "lat": 29.3919,
+        "lon": 79.4542,
+        "confidence": "high"
+      },
+      "Kanatal": {
+        "lat": 30.3667,
+        "lon": 78.3667,
+        "confidence": "high"
+      },
+      "Karjat": {
+        "lat": 18.9107,
+        "lon": 73.326,
+        "confidence": "high"
+      },
+      "Ranthambhore": {
+        "lat": 26.0173,
+        "lon": 76.5026,
+        "confidence": "high"
+      },
+      "Sunderbans": {
+        "lat": 22.1652,
+        "lon": 88.8079,
+        "confidence": "approximate - Godkhali itself not independently found; using adjacent Gosaba"
+      },
+      "Pench": {
+        "lat": 21.7679,
+        "lon": 79.2961,
+        "confidence": "moderate - Turia gate"
+      },
+      "Satpura": {
+        "lat": 22.495,
+        "lon": 78.231,
+        "confidence": "verified"
+      },
+      "Wayanad": {
+        "lat": 11.6086,
+        "lon": 76.0839,
+        "confidence": "high - Kalpetta"
+      },
+      "Palk Bay ( Raneshwaram)": {
+        "lat": 9.2876,
+        "lon": 79.3129,
+        "confidence": "high - Rameswaram"
+      },
+      "Hampi": {
+        "lat": 15.335,
+        "lon": 76.46,
+        "confidence": "high"
+      },
+      "Kabini": {
+        "lat": 11.9601,
+        "lon": 76.3172,
+        "confidence": "moderate"
+      },
+      "Lonawala": {
+        "lat": 18.7546,
+        "lon": 73.4062,
+        "confidence": "high"
+      },
+      "Khandala": {
+        "lat": 18.7602,
+        "lon": 73.3799,
+        "confidence": "high"
+      },
+      "Goa": {
+        "lat": 15.4909,
+        "lon": 73.8278,
+        "confidence": "high - Panaji"
+      },
+      "Gujrat": {
+        "lat": 23.0225,
+        "lon": 72.5714,
+        "confidence": "high - Ahmedabad"
+      },
+      "Amboli": {
+        "lat": 15.9509,
+        "lon": 74.0017,
+        "confidence": "high"
+      },
+      "Meghalaya": {
+        "lat": 25.5788,
+        "lon": 91.8933,
+        "confidence": "high - Shillong"
+      },
+      "Nagaland": {
+        "lat": 25.6751,
+        "lon": 94.1086,
+        "confidence": "high - Kohima"
+      },
+      "Kaziranga": {
+        "lat": 26.5775,
+        "lon": 93.1714,
+        "confidence": "moderate - Kohora gate"
+      },
+      "Udupi": {
+        "lat": 13.3409,
+        "lon": 74.7421,
+        "confidence": "high"
+      },
+      "Kanha": {
+        "lat": 22.13,
+        "lon": 80.68,
+        "confidence": "approximate - Mukki gate, no exact verified point found"
+      }
+    }
+  },
+  "_comment_coordinates": "Lat/long reference data for programs and their airports. Confidence varies per destination - see the confidence field: \"verified\" means checked against a live source, \"high\" means a well-established town/city center, \"moderate\" or \"approximate\" means a best-effort estimate for a specific gate/jetty that has no single commonly-published coordinate (e.g. Mukki Gate, Godkhali) - treat those as reasonable but not precise, especially for anything distance-sensitive."
 }
