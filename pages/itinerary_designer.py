@@ -4,7 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from itinerary_logic import (
-    build_stage1_grid, build_stage3_timeline, compute_addable_slots,
+    build_stage1_grid, build_stage3_timeline, compute_addable_slots, compute_cascade_shifts,
     expand_activity_or_meal, get_program, load_rules,
 )
 
@@ -258,13 +258,21 @@ if "stage1_grid" in st.session_state:
             for d in grid["days"]:
                 date_label = d["date"].strftime("%d %b %Y")
                 day_rows = [
-                    {"Time": r["Time"], "Activity": r["Activity"], "Type": r["Type"], "Notes": r["Notes"]}
+                    {"Time": r["Time"], "Activity": r["Activity"], "Type": r["Type"], "Notes": r["Notes"],
+                     "_group": r["_group"], "_order": r["_order"]}
                     for r in rows if r["Date"] == date_label
                 ]
                 stage3_dfs[d["date"].isoformat()] = pd.DataFrame(
-                    day_rows, columns=["Time", "Activity", "Type", "Notes"]
+                    day_rows, columns=["Time", "Activity", "Type", "Notes", "_group", "_order"]
                 )
             st.session_state["stage3_dfs"] = stage3_dfs
+            # Every future Stage 3 insertion needs an _order higher than anything already
+            # used, so newly-added items always rank as "added most recently" for the
+            # cascade's insertion-order tie-break.
+            all_orders = [r["_order"] for r in rows] or [0]
+            all_groups = [r["_group"] for r in rows] or [-1]
+            st.session_state["stage3_order_counter"] = max(all_orders) + 1
+            st.session_state["stage3_group_counter"] = max(all_groups) + 1
             # Clear any per-day widget/dialog/pending-shift state left over from a
             # previous generation.
             for k in list(st.session_state.keys()):
@@ -364,9 +372,13 @@ if "stage1_grid" in st.session_state:
                             meal_stop_required, meal_stop_minutes,
                             meal_rules, accommodation_details,
                         )
+                        new_group = st.session_state["stage3_group_counter"]
+                        new_order = st.session_state["stage3_order_counter"]
+                        st.session_state["stage3_group_counter"] += 1
+                        st.session_state["stage3_order_counter"] += 1
                         new_rows_formatted = pd.DataFrame([
                             {"Time": r["dt"].strftime("%H:%M"), "Activity": r["Activity"],
-                             "Type": r["Type"], "Notes": r["Notes"]}
+                             "Type": r["Type"], "Notes": r["Notes"], "_group": new_group, "_order": new_order}
                             for r in new_rows
                         ])
 
@@ -374,32 +386,28 @@ if "stage1_grid" in st.session_state:
                         anchor_minutes = parsed_time.hour * 60 + parsed_time.minute
                         end_minutes = end_dt.hour * 60 + end_dt.minute
 
-                        # Detect the conflict using ONLY the pre-existing rows, before
-                        # merging - an existing row that falls chronologically inside the
-                        # new activity's span (e.g. a Stage 1 transfer at 12:30, when the
-                        # new activity runs 12:00-13:00) would otherwise get sorted in
-                        # between the new activity's own start/end rows, where a
-                        # position-based "check what's immediately after" never sees it.
-                        existing_candidates = [
-                            (idx, _parse_time_safe(df2.loc[idx, "Time"])) for idx in df2.index
-                        ]
-                        existing_candidates = [
-                            (idx, t) for idx, t in existing_candidates
-                            if t is not None and t >= anchor_minutes
-                        ]
-                        if existing_candidates:
-                            earliest_t = min(t for _, t in existing_candidates)
-                            if earliest_t < end_minutes:
-                                st.session_state[pending_key] = {
-                                    "threshold_minutes": anchor_minutes,
-                                    "delta": end_minutes - earliest_t,
-                                    "exclude_keys": list(zip(
-                                        new_rows_formatted["Time"], new_rows_formatted["Activity"]
-                                    )),
-                                    "activity": name,
-                                }
-                            else:
-                                st.session_state.pop(pending_key, None)
+                        # Reconstruct every OTHER existing group's [start, end] span and
+                        # insertion order from the pre-merge table, then run the two-phase
+                        # cascade: a chronological ripple finds which groups are actually
+                        # disrupted and how far the disruption reaches (e.g. it might stop
+                        # before a later item that already had enough of a gap); the
+                        # disrupted set is then laid out by insertion order, not original
+                        # time - matching how a person expects repeatedly-bumped items to
+                        # settle (whichever was added to the plan earlier goes first).
+                        existing_groups = {}
+                        for gid, group_df in df2.groupby("_group"):
+                            times = [_parse_time_safe(t) for t in group_df["Time"]]
+                            times = [t for t in times if t is not None]
+                            if not times:
+                                continue
+                            existing_groups[gid] = {
+                                "start": min(times), "end": max(times),
+                                "order": group_df["_order"].iloc[0],
+                            }
+
+                        group_shifts = compute_cascade_shifts(existing_groups, anchor_minutes, end_minutes)
+                        if group_shifts:
+                            st.session_state[pending_key] = {"group_shifts": group_shifts, "activity": name}
                         else:
                             st.session_state.pop(pending_key, None)
 
@@ -424,8 +432,23 @@ if "stage1_grid" in st.session_state:
                 key=editor_key,
                 num_rows="dynamic",
                 use_container_width=True,
-                column_config={"Time": st.column_config.TextColumn("Time", help="24-hour HH:MM")},
+                column_config={
+                    "Time": st.column_config.TextColumn("Time", help="24-hour HH:MM"),
+                    "_group": {"hidden": True},
+                    "_order": {"hidden": True},
+                },
             )
+
+            # A row added via the table's own native "+" (not the Insert Row dialog)
+            # won't have a _group/_order yet - give it fresh ones so future cascades
+            # still know how to treat it (as its own single-row group, added just now).
+            missing_meta = edited_df["_group"].isna()
+            if missing_meta.any():
+                for idx in edited_df.index[missing_meta]:
+                    edited_df.loc[idx, "_group"] = st.session_state["stage3_group_counter"]
+                    edited_df.loc[idx, "_order"] = st.session_state["stage3_order_counter"]
+                    st.session_state["stage3_group_counter"] += 1
+                    st.session_state["stage3_order_counter"] += 1
 
             shift_candidate = None
             for i in current_df.index:
@@ -456,12 +479,24 @@ if "stage1_grid" in st.session_state:
                 if st.button("⏩ Apply shift to later rows", key=f"apply_{date_iso}"):
                     if pending:
                         df3 = st.session_state["stage3_dfs"][date_iso].copy()
-                        delta = pending["delta"]
-                        if "threshold_minutes" in pending:
-                            # From an insert: shift every row at/after the new activity's
-                            # start time, EXCEPT the newly inserted rows themselves
-                            # (identified by their exact Time+Activity, since this table
-                            # has no persistent row IDs to match on more precisely).
+                        if "group_shifts" in pending:
+                            # From an insert: each disrupted group shifts by its own
+                            # computed amount (from compute_cascade_shifts), preserving
+                            # that group's internal structure exactly.
+                            group_shifts = pending["group_shifts"]
+                            for j in df3.index:
+                                gid = df3.loc[j, "_group"]
+                                if gid not in group_shifts:
+                                    continue
+                                t = _parse_time_safe(df3.loc[j, "Time"])
+                                if t is None:
+                                    continue
+                                shifted = max(0, min(23 * 60 + 59, t + group_shifts[gid]))
+                                df3.loc[j, "Time"] = f"{shifted // 60:02d}:{shifted % 60:02d}"
+                        elif "threshold_minutes" in pending:
+                            # From an older-style insert detection: shift every row
+                            # at/after the threshold, except the newly inserted rows.
+                            delta = pending["delta"]
                             threshold = pending["threshold_minutes"]
                             exclude_keys = {tuple(k) for k in pending.get("exclude_keys", [])}
                             for j in df3.index:
@@ -474,6 +509,7 @@ if "stage1_grid" in st.session_state:
                                 df3.loc[j, "Time"] = f"{shifted // 60:02d}:{shifted % 60:02d}"
                         else:
                             # From an edit: shift every row positioned after the edited one.
+                            delta = pending["delta"]
                             row_idx = pending["row_index"]
                             for j in df3.index:
                                 if j <= row_idx:
@@ -502,7 +538,9 @@ if "stage1_grid" in st.session_state:
                     st.rerun()
 
             with col_download:
-                day_csv = st.session_state["stage3_dfs"][date_iso].to_csv(index=False).encode("utf-8")
+                day_csv = st.session_state["stage3_dfs"][date_iso].drop(
+                    columns=["_group", "_order"]
+                ).to_csv(index=False).encode("utf-8")
                 st.download_button(
                     f"Download {date_label} as CSV", day_csv, f"itinerary_{date_iso}.csv",
                     "text/csv", key=f"dl_{date_iso}",
@@ -514,7 +552,7 @@ if "stage1_grid" in st.session_state:
         for d in grid["days"]:
             date_iso = d["date"].isoformat()
             if date_iso in st.session_state["stage3_dfs"]:
-                day_df = st.session_state["stage3_dfs"][date_iso].copy()
+                day_df = st.session_state["stage3_dfs"][date_iso].drop(columns=["_group", "_order"]).copy()
                 day_df.insert(0, "Date", d["date"].strftime("%d %b %Y"))
                 combined_parts.append(day_df)
         if combined_parts:
@@ -524,5 +562,4 @@ if "stage1_grid" in st.session_state:
                 "📥 Download Combined Timewise Itinerary (all days)",
                 combined_csv, "timewise_itinerary_combined.csv", "text/csv",
             )
-
             

@@ -369,13 +369,21 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
     back within its (date, slot) group, in insertion order.
 
     Returns a list of {"Date": str, "Time": str, "Activity": str, "Type": str, "Notes":
-    str} rows, sorted chronologically across the whole plan (locked Stage 1 slots and
-    open Stage 2 slots never overlap in practice, by construction of compute_addable_slots,
-    so there's no ordering ambiguity between the two sources within a single slot).
+    str, "_group": int, "_order": int} rows, sorted chronologically across the whole
+    plan. _group identifies which rows came from the same source item (e.g. all 5 rows
+    of one transfer-based activity share a _group); _order is that item's insertion
+    sequence, used by Stage 3's cascade logic to re-sequence multiple disrupted items by
+    the order they were added, once a later insert pushes into them (Stage 1's own
+    events all get _order 0, since they exist before any Stage 2 addition).
     """
     rows = []
+    group_id = 0
     for event in timed_events:
-        rows.append({"dt": event["datetime"], "Activity": event["label"], "Type": event["type"], "Notes": ""})
+        rows.append({
+            "dt": event["datetime"], "Activity": event["label"], "Type": event["type"], "Notes": "",
+            "_group": group_id, "_order": 0,
+        })
+        group_id += 1
 
     grouped = defaultdict(list)
     for a in stage2_activities:
@@ -393,6 +401,11 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
                 a.get("meal_stop_required", False), a.get("meal_stop_minutes"),
                 meal_rules, accommodation_details,
             )
+            this_group = group_id
+            group_id += 1
+            for r in new_rows:
+                r["_group"] = this_group
+                r["_order"] = a["order"] + 1  # >0, so Stage 2 items always rank after Stage 1's 0s
             rows.extend(new_rows)
 
     rows.sort(key=lambda r: r["dt"])
@@ -403,7 +416,63 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
             "Activity": r["Activity"],
             "Type": r["Type"],
             "Notes": r["Notes"],
+            "_group": r["_group"],
+            "_order": r["_order"],
         }
         for r in rows
     ]
+
+
+def compute_cascade_shifts(existing_groups, new_start_minutes, new_end_minutes):
+    """
+    existing_groups: dict of group_id -> {"start": int minutes, "end": int minutes,
+      "order": int} for every OTHER group currently in a Stage 3 day's table (not the
+      group that was just inserted) - pass everything, including groups entirely before
+      new_start_minutes; those are filtered out internally and never affected.
+    new_start_minutes/new_end_minutes: the [start, end) span of the just-inserted item.
+
+    Two-phase cascade:
+    Phase 1 (chronological ripple) - walk existing groups in chronological order (by
+    current start time) to determine which ones are actually disrupted by the new item,
+    and how far the disruption reaches. A group is disrupted if it would otherwise start
+    before the "floor" established by everything disrupted before it. This correctly
+    finds the disruption's reach - e.g. it might disturb the next two items but leave a
+    third alone if there was already enough of a gap to absorb the push - without yet
+    deciding the disrupted items' final order.
+
+    Phase 2 (insertion-order layout) - the disrupted set from phase 1 is laid out, back
+    to back, starting right after the new item ends, in the order those items were
+    originally added to the plan (their "order"), not their original scheduled time.
+    Each item keeps its own original duration. This is the behavior actually wanted: if
+    two later, distinct items both end up needing to move as a result of one insertion,
+    whichever was added to the plan earlier is scheduled first in the resulting gap.
+
+    Returns {group_id: shift_minutes} for every group that needs to move (omitted
+    entirely if a group isn't affected).
+    """
+    candidates = sorted(
+        (item for item in existing_groups.items() if item[1]["start"] >= new_start_minutes),
+        key=lambda kv: kv[1]["start"],
+    )
+
+    floor = new_end_minutes
+    affected = []
+    for group_id, g in candidates:
+        if g["start"] < floor:
+            affected.append(group_id)
+            floor += g["end"] - g["start"]
+        else:
+            break  # ripple absorbed here - candidates are time-sorted, so nothing later needs to move either
+
+    affected_by_insertion_order = sorted(affected, key=lambda gid: existing_groups[gid]["order"])
+    shifts = {}
+    floor = new_end_minutes
+    for group_id in affected_by_insertion_order:
+        g = existing_groups[group_id]
+        duration = g["end"] - g["start"]
+        new_group_start = floor
+        shifts[group_id] = new_group_start - g["start"]
+        floor = new_group_start + duration
+
+    return shifts
     
