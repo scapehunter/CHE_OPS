@@ -305,4 +305,3 @@
   },
   "_comment_transfer_rules": "Same overlap logic applies during activities, not just transfers - applies_to lists which kinds of blocks this rule should be checked against once a scheduling stage is built. These are general rules, unless a specific plan/day calls for an exception."
 }
-

@@ -310,13 +310,6 @@ if "stage1_grid" in st.session_state:
 
             @st.dialog(f"Insert Row — {date_label}")
             def insert_row_dialog(date_iso=date_iso, day_date=d["date"], editor_key=editor_key, insert_flag_key=insert_flag_key):
-                df = st.session_state["stage3_dfs"][date_iso]
-                options = ["At the very start"] + [
-                    f"After row {i + 1}: {r['Time']} — {r['Activity']}" for i, r in df.iterrows()
-                ]
-                position_label = st.selectbox("Position", options)
-                position_idx = 0 if position_label == "At the very start" else options.index(position_label)
-
                 kind = st.radio("Type", ["Activity", "Meal"], horizontal=True)
                 if kind == "Meal":
                     name = st.selectbox("Meal", meal_names)
@@ -327,7 +320,10 @@ if "stage1_grid" in st.session_state:
                     name = st.text_input("Activity Name *")
                     duration_minutes = st.number_input("Duration (minutes) *", min_value=0, value=60, step=15)
 
-                anchor_time_str = st.text_input("Time *", placeholder="HH:MM")
+                anchor_time_str = st.text_input(
+                    "Time *", placeholder="HH:MM",
+                    help="This determines where the row lands in the table - rows are always in time order.",
+                )
 
                 transfer_required = st.checkbox("Transfer required?")
                 transfer_minutes = None
@@ -374,11 +370,14 @@ if "stage1_grid" in st.session_state:
                             for r in new_rows
                         ])
                         df2 = st.session_state["stage3_dfs"][date_iso]
-                        top = df2.iloc[:position_idx]
-                        bottom = df2.iloc[position_idx:]
-                        st.session_state["stage3_dfs"][date_iso] = pd.concat(
-                            [top, new_rows_formatted, bottom], ignore_index=True
-                        )
+                        combined = pd.concat([df2, new_rows_formatted], ignore_index=True)
+                        combined["_sort_key"] = combined["Time"].apply(_parse_time_safe)
+                        # Rows with an unparseable time (shouldn't normally happen here,
+                        # since this dialog always produces valid HH:MM) sort last rather
+                        # than crashing or silently vanishing.
+                        combined["_sort_key"] = combined["_sort_key"].fillna(24 * 60)
+                        combined = combined.sort_values("_sort_key", kind="stable").drop(columns="_sort_key").reset_index(drop=True)
+                        st.session_state["stage3_dfs"][date_iso] = combined
                         st.session_state.pop(editor_key, None)
                         st.session_state[insert_flag_key] = False
                         st.rerun()
@@ -463,5 +462,4 @@ if "stage1_grid" in st.session_state:
                 "📥 Download Combined Timewise Itinerary (all days)",
                 combined_csv, "timewise_itinerary_combined.csv", "text/csv",
             )
-
             

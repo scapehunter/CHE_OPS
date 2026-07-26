@@ -246,11 +246,11 @@ def expand_activity_or_meal(
     Returns (rows, end_dt): rows is a list of {"dt", "Activity", "Type", "Notes"} dicts;
     end_dt is when the next sequential item (if any) should start.
 
-    A "Meal" kind is snapped forward to its rule's window_start if the moment it would
-    actually start (i.e. after any transfer, not when the transfer begins) is earlier
-    than that, and flagged with a note if it would start after the window closes - the
-    whole chain (including the preceding transfer-to time) shifts together so the
-    transfer duration itself stays correct.
+    A "Meal" kind is snapped forward to the average (midpoint) of its rule's window if the
+    moment it would actually start (i.e. after any transfer, not when the transfer begins)
+    is earlier than that, and flagged with a note if it would start after the window
+    closes - the whole chain (including the preceding transfer-to time) shifts together
+    so the transfer duration itself stays correct.
     """
     accommodation_label = accommodation_details or "accommodation"
 
@@ -272,9 +272,15 @@ def expand_activity_or_meal(
                 minutes=_parse_hhmm(meal_rule["window_start"]))
             window_end_dt = datetime.combine(day_date, datetime.min.time()) + timedelta(
                 minutes=_parse_hhmm(meal_rule["window_end"]))
-            if start_dt < window_start_dt:
-                shift = window_start_dt - start_dt
-                start_dt = window_start_dt
+            average_dt = window_start_dt + (window_end_dt - window_start_dt) / 2
+            if start_dt < average_dt:
+                # Nothing earlier in the sequence has already pushed this meal past its
+                # natural midpoint - anchor it there rather than at window_start, so a
+                # meal added with no other context lands at a genuinely typical time for
+                # it (e.g. Lunch defaults to 13:00, the middle of 12:00-14:00) rather than
+                # the earliest technically-valid moment.
+                shift = average_dt - start_dt
+                start_dt = average_dt
                 transfer_to_dt = transfer_to_dt + shift
             if start_dt > window_end_dt:
                 note = f"⚠️ outside usual {name} window ({meal_rule['window_start']}-{meal_rule['window_end']})"
@@ -362,5 +368,4 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
         }
         for r in rows
     ]
-
     
