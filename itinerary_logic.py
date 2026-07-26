@@ -69,6 +69,33 @@ def _meal_overlaps(window_start_dt, window_end_dt, meal_rules):
     return result
 
 
+def apply_washroom_break(minutes, transfer_rules):
+    """
+    Returns (effective_minutes, was_added). If a transfer exceeds the washroom-break
+    threshold, this adds a fixed buffer (washroom_break_minutes, default 20) to the
+    travel time itself - not just a note - so downstream timing actually reflects the
+    stop, and flags that it was added in the note. Shared by build_stage1_grid and any
+    other transfer-generating logic (e.g. a Stage 2 relocation transfer) so both apply
+    the same threshold/buffer consistently.
+    """
+    threshold = transfer_rules.get("washroom_break_threshold_minutes")
+    extra = transfer_rules.get("washroom_break_minutes", 20)
+    if threshold and minutes > threshold:
+        return minutes + extra, True
+    return minutes, False
+
+
+def build_transfer_note(washroom_break_added, window_start_dt, window_end_dt, meal_rules, transfer_rules):
+    notes = []
+    if washroom_break_added:
+        extra = transfer_rules.get("washroom_break_minutes", 20)
+        notes.append(f"washroom break recommended (+{extra} min added)")
+    overlapping_meals = _meal_overlaps(window_start_dt, window_end_dt, meal_rules)
+    if overlapping_meals:
+        notes.append(f"overlaps {', '.join(overlapping_meals)} - arrange meal stop or packed meal")
+    return f" ({'; '.join(notes)})" if notes else ""
+
+
 def build_stage1_grid(
     plan_name, start_date, end_date,
     arrival_airport, arrival_time, arrival_travel_minutes,
@@ -147,29 +174,6 @@ def build_stage1_grid(
                 timed_events.append({"datetime": dt, "label": text + spilled_note, "type": event_type})
                 return
 
-    def apply_washroom_break(minutes):
-        """
-        Returns (effective_minutes, was_added). If a transfer exceeds the washroom-break
-        threshold, this adds a fixed buffer (washroom_break_minutes, default 20) to the
-        travel time itself - not just a note - so downstream timing actually reflects
-        the stop, and flags that it was added in the note.
-        """
-        threshold = transfer_rules.get("washroom_break_threshold_minutes")
-        extra = transfer_rules.get("washroom_break_minutes", 20)
-        if threshold and minutes > threshold:
-            return minutes + extra, True
-        return minutes, False
-
-    def transfer_notes(washroom_break_added, window_start_dt, window_end_dt):
-        notes = []
-        if washroom_break_added:
-            extra = transfer_rules.get("washroom_break_minutes", 20)
-            notes.append(f"washroom break recommended (+{extra} min added)")
-        overlapping_meals = _meal_overlaps(window_start_dt, window_end_dt, meal_rules)
-        if overlapping_meals:
-            notes.append(f"overlaps {', '.join(overlapping_meals)} - arrange meal stop or packed meal")
-        return f" ({'; '.join(notes)})" if notes else ""
-
     arrival_dt = datetime.combine(start_date, arrival_time)
     departure_dt = datetime.combine(end_date, departure_time)
 
@@ -179,9 +183,9 @@ def build_stage1_grid(
     depart_for_program_rule = next((r for r in buffer_rules if r["id"] == "depart_for_hotel"), None)
     if depart_for_program_rule:
         depart_for_program_dt = arrival_dt + timedelta(minutes=depart_for_program_rule["offset_minutes"])
-        effective_arrival_travel, washroom_added = apply_washroom_break(arrival_travel_minutes)
+        effective_arrival_travel, washroom_added = apply_washroom_break(arrival_travel_minutes, transfer_rules)
         program_arrival_dt = depart_for_program_dt + timedelta(minutes=effective_arrival_travel)
-        note = transfer_notes(washroom_added, depart_for_program_dt, program_arrival_dt)
+        note = build_transfer_note(washroom_added, depart_for_program_dt, program_arrival_dt, meal_rules, transfer_rules)
         add_entry(depart_for_program_dt, f"{depart_for_program_rule['label']}{note}", "Road Transfer")
         add_entry(program_arrival_dt, f"Arrival at {program_location or 'program location'}", "Road Transfer")
 
@@ -203,9 +207,9 @@ def build_stage1_grid(
 
     if departure_side_times:
         earliest_prep_dt = min(departure_side_times.values())
-        effective_departure_travel, washroom_added = apply_washroom_break(departure_travel_minutes)
+        effective_departure_travel, washroom_added = apply_washroom_break(departure_travel_minutes, transfer_rules)
         depart_program_for_airport_dt = earliest_prep_dt - timedelta(minutes=effective_departure_travel)
-        note = transfer_notes(washroom_added, depart_program_for_airport_dt, earliest_prep_dt)
+        note = build_transfer_note(washroom_added, depart_program_for_airport_dt, earliest_prep_dt, meal_rules, transfer_rules)
         add_entry(depart_program_for_airport_dt, f"Depart {program_location or 'program location'} for airport{note}", "Road Transfer")
 
         # Anchored to the moment the group leaves the hotel for the airport - NOT to the

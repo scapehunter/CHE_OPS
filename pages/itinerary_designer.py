@@ -358,7 +358,7 @@ if "stage1_grid" in st.session_state:
                         st.warning("Enter a meal stop duration, or uncheck 'Meal stop needed'.")
                     else:
                         anchor_dt = datetime.combine(day_date, parsed_time)
-                        new_rows, _ = expand_activity_or_meal(
+                        new_rows, end_dt = expand_activity_or_meal(
                             anchor_dt, day_date, kind, name, duration_minutes,
                             transfer_required, transfer_minutes,
                             meal_stop_required, meal_stop_minutes,
@@ -366,10 +366,11 @@ if "stage1_grid" in st.session_state:
                         )
                         new_rows_formatted = pd.DataFrame([
                             {"Time": r["dt"].strftime("%H:%M"), "Activity": r["Activity"],
-                             "Type": r["Type"], "Notes": r["Notes"]}
+                             "Type": r["Type"], "Notes": r["Notes"], "_is_new": True}
                             for r in new_rows
                         ])
-                        df2 = st.session_state["stage3_dfs"][date_iso]
+                        df2 = st.session_state["stage3_dfs"][date_iso].copy()
+                        df2["_is_new"] = False
                         combined = pd.concat([df2, new_rows_formatted], ignore_index=True)
                         combined["_sort_key"] = combined["Time"].apply(_parse_time_safe)
                         # Rows with an unparseable time (shouldn't normally happen here,
@@ -377,6 +378,27 @@ if "stage1_grid" in st.session_state:
                         # than crashing or silently vanishing.
                         combined["_sort_key"] = combined["_sort_key"].fillna(24 * 60)
                         combined = combined.sort_values("_sort_key", kind="stable").drop(columns="_sort_key").reset_index(drop=True)
+
+                        # If the inserted activity's end time runs into whatever row comes
+                        # right after it, offer (via the same Apply-shift control used for
+                        # edits) to push the rest of the day forward by the overlap amount -
+                        # doesn't auto-apply, just makes the option available.
+                        new_indices = combined.index[combined["_is_new"]].tolist()
+                        combined = combined.drop(columns="_is_new")
+                        if new_indices:
+                            last_new_idx = new_indices[-1]
+                            next_idx = last_new_idx + 1
+                            end_minutes = end_dt.hour * 60 + end_dt.minute
+                            next_time = _parse_time_safe(combined.loc[next_idx, "Time"]) if next_idx < len(combined) else None
+                            if next_time is not None and end_minutes > next_time:
+                                st.session_state[pending_key] = {
+                                    "row_index": last_new_idx,
+                                    "delta": end_minutes - next_time,
+                                    "activity": name,
+                                }
+                            else:
+                                st.session_state.pop(pending_key, None)
+
                         st.session_state["stage3_dfs"][date_iso] = combined
                         st.session_state.pop(editor_key, None)
                         st.session_state[insert_flag_key] = False
@@ -416,9 +438,11 @@ if "stage1_grid" in st.session_state:
                     f"Time for **{pending['activity']}** changed by {sign}{pending['delta']} min. "
                     f"Apply the same shift to every later row on {date_label}?"
                 )
-                col_apply, col_dismiss = st.columns([1, 1])
-                with col_apply:
-                    if st.button("⏩ Apply shift to later rows", key=f"apply_{date_iso}"):
+
+            col_apply, col_dismiss = st.columns([1, 1])
+            with col_apply:
+                if st.button("⏩ Apply shift to later rows", key=f"apply_{date_iso}"):
+                    if pending:
                         df3 = st.session_state["stage3_dfs"][date_iso]
                         row_idx = pending["row_index"]
                         delta = pending["delta"]
@@ -434,10 +458,11 @@ if "stage1_grid" in st.session_state:
                         st.session_state.pop(pending_key, None)
                         st.session_state.pop(editor_key, None)
                         st.rerun()
-                with col_dismiss:
-                    if st.button("Dismiss", key=f"dismiss_{date_iso}"):
-                        st.session_state.pop(pending_key, None)
-                        st.rerun()
+                    # else: nothing pending - clicking does nothing, on purpose.
+            with col_dismiss:
+                if pending and st.button("Dismiss", key=f"dismiss_{date_iso}"):
+                    st.session_state.pop(pending_key, None)
+                    st.rerun()
 
             with col_download:
                 day_csv = st.session_state["stage3_dfs"][date_iso].to_csv(index=False).encode("utf-8")
@@ -462,5 +487,3 @@ if "stage1_grid" in st.session_state:
                 "📥 Download Combined Timewise Itinerary (all days)",
                 combined_csv, "timewise_itinerary_combined.csv", "text/csv",
             )
-
-            
