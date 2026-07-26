@@ -112,8 +112,11 @@ if submitted:
         "arrival_time": arrival_time, "departure_time": departure_time,
     }
     st.session_state["stage2_activities"] = []
+    st.session_state["accommodation_details"] = ""
     st.session_state.pop("stage3_df", None)
     st.session_state.pop("stage3_editor", None)
+    st.session_state.pop("stage3_rows", None)
+    st.session_state["stage3_next_id"] = 0
 
 if "stage1_grid" in st.session_state:
     grid = st.session_state["stage1_grid"]
@@ -122,6 +125,14 @@ if "stage1_grid" in st.session_state:
     st.caption(f"Location: {grid['program_location'] or '—'}")
 
     st.subheader("Stage 2")
+
+    accommodation_details = st.text_input(
+        "Accommodation Details *",
+        value=st.session_state.get("accommodation_details", ""),
+        placeholder="e.g. Nirvana Shillong, Laitumkhrah",
+        help="Used to label the 'transfer back to accommodation' rows in Stage 3.",
+    )
+    st.session_state["accommodation_details"] = accommodation_details
 
     boundary = st.session_state["stage1_boundary"]
     addable = compute_addable_slots(
@@ -219,34 +230,38 @@ if "stage1_grid" in st.session_state:
                 "This plan was generated before Stage 3 support was added. Click "
                 "'Generate Plan Grid' above to rebuild it, then try again."
             )
+        elif not accommodation_details:
+            st.error("Accommodation Details is required before generating the timewise itinerary.")
         else:
             rows = build_stage3_timeline(
                 grid["timed_events"], st.session_state.get("stage2_activities", []),
                 meal_rules, rules_data["default_slot_starts"],
+                accommodation_details=accommodation_details,
             )
-            st.session_state["stage3_df"] = pd.DataFrame(rows)
-            st.session_state.pop("stage3_editor", None)
+            st.session_state["stage3_next_id"] = 0
 
-    if "stage3_df" in st.session_state:
+            def _new_row_id():
+                st.session_state["stage3_next_id"] += 1
+                return st.session_state["stage3_next_id"]
+
+            st.session_state["stage3_rows"] = [{**r, "_id": _new_row_id()} for r in rows]
+            # Drop any per-row widget state left over from a previous Stage 3 generation,
+            # so old rows' Time/Activity/etc. values can't leak into new rows that happen
+            # to reuse the same _id counter values.
+            for k in list(st.session_state.keys()):
+                if k.startswith(("date_", "time_", "activity_", "type_", "notes_")):
+                    del st.session_state[k]
+
+    if "stage3_rows" in st.session_state:
         st.subheader("Stage 3: Timewise Itinerary")
         st.caption(
             "Dates can't be changed - pick from the plan's existing dates only. Everything else "
-            "is editable, and you can add new rows at the bottom. Editing a Time, or inserting a "
-            "new row, shifts every later row on that same date by the same amount, so the rest of "
-            "the day's schedule stays consistent instead of going stale."
+            "is editable. Click ➕ next to a row to insert a new row directly after it - not just "
+            "at the end. Editing a Time shifts every later row that same day by the same amount, "
+            "so the rest of the day's schedule stays consistent instead of going stale."
         )
 
         valid_dates = [d["date"].strftime("%d %b %Y") for d in grid["days"]]
-        edited_df = st.data_editor(
-            st.session_state["stage3_df"],
-            key="stage3_editor",
-            num_rows="dynamic",
-            use_container_width=True,
-            column_config={
-                "Date": st.column_config.SelectboxColumn("Date", options=valid_dates, required=True),
-                "Time": st.column_config.TextColumn("Time", help="24-hour HH:MM"),
-            },
-        )
 
         def _parse_time_safe(s):
             try:
@@ -255,57 +270,106 @@ if "stage1_grid" in st.session_state:
             except (ValueError, AttributeError):
                 return None
 
-        old_df = st.session_state["stage3_df"]
-        cascade_needed = False
-        working = edited_df.copy()
+        def _new_row_id():
+            st.session_state["stage3_next_id"] += 1
+            return st.session_state["stage3_next_id"]
 
-        for i in old_df.index:
-            if i not in working.index:
-                continue  # row was deleted
-            old_time = _parse_time_safe(old_df.loc[i, "Time"])
-            new_time = _parse_time_safe(working.loc[i, "Time"])
-            old_date = old_df.loc[i, "Date"]
-            new_date = working.loc[i, "Date"]
-            if old_time is None or new_time is None or new_date != old_date:
-                continue
-            delta = new_time - old_time
-            if delta == 0:
-                continue
-            cascade_needed = True
-            # Shift every other row on the same date whose old time was after this
-            # row's old time, by the same delta - keeps the rest of that day's
-            # sequence consistent instead of leaving it stale after one edit.
-            for j in old_df.index:
-                if j == i or j not in working.index:
-                    continue
-                if old_df.loc[j, "Date"] != old_date:
-                    continue
-                other_old_time = _parse_time_safe(old_df.loc[j, "Time"])
-                if other_old_time is None or other_old_time <= old_time:
-                    continue
-                shifted = other_old_time + delta
-                shifted = max(0, min(23 * 60 + 59, shifted))
-                working.loc[j, "Time"] = f"{shifted // 60:02d}:{shifted % 60:02d}"
+        rows_list = st.session_state["stage3_rows"]
 
-        rows_added = any(i not in old_df.index for i in working.index)
+        header_cols = st.columns([1.3, 0.8, 2.3, 1.1, 2, 0.4, 0.4])
+        for col, label in zip(header_cols, ["Date", "Time", "Activity", "Type", "Notes", "", ""]):
+            if label:
+                col.markdown(f"**{label}**")
 
-        if cascade_needed or rows_added:
-            working["_sort_key"] = working.apply(
-                lambda r: (r["Date"], _parse_time_safe(r["Time"]) or 0), axis=1
-            )
-            working = working.sort_values("_sort_key").drop(columns="_sort_key").reset_index(drop=True)
-            st.session_state["stage3_df"] = working
-            # st.data_editor tracks edits as a diff against whatever dataframe it first
-            # bound to under this key - just passing it a freshly re-sorted dataframe on
-            # the next run doesn't reliably override that (a newly inserted row would
-            # otherwise stay visually stuck at the bottom, in raw insertion order,
-            # regardless of its Date/Time). Clearing the widget's own state forces it to
-            # rebind fresh to the corrected order instead of resolving against its stale
-            # internal baseline.
-            st.session_state.pop("stage3_editor", None)
+        insert_after_idx = None
+        delete_idx = None
+
+        for idx, row in enumerate(rows_list):
+            rid = row["_id"]
+            cols = st.columns([1.3, 0.8, 2.3, 1.1, 2, 0.4, 0.4])
+            date_idx = valid_dates.index(row["Date"]) if row["Date"] in valid_dates else 0
+            with cols[0]:
+                st.selectbox("Date", valid_dates, index=date_idx, key=f"date_{rid}", label_visibility="collapsed")
+            with cols[1]:
+                st.text_input("Time", value=row["Time"], key=f"time_{rid}", label_visibility="collapsed")
+            with cols[2]:
+                st.text_input("Activity", value=row["Activity"], key=f"activity_{rid}", label_visibility="collapsed")
+            with cols[3]:
+                st.text_input("Type", value=row["Type"], key=f"type_{rid}", label_visibility="collapsed")
+            with cols[4]:
+                st.text_input("Notes", value=row["Notes"], key=f"notes_{rid}", label_visibility="collapsed")
+            with cols[5]:
+                if st.button("➕", key=f"insert_{rid}", help="Insert a new row after this one"):
+                    insert_after_idx = idx
+            with cols[6]:
+                if st.button("🗑️", key=f"delete_{rid}", help="Delete this row"):
+                    delete_idx = idx
+
+        # Read back the live widget values (Streamlit tracks these via session_state once
+        # rendered with a key) and detect any Time change, to drive the cascade - compared
+        # against the stored rows_list, which reflects the state as of the last completed run.
+        cascade_deltas = {}  # idx -> delta minutes, for rows whose Time changed this run
+        for idx, row in enumerate(rows_list):
+            rid = row["_id"]
+            new_time = _parse_time_safe(st.session_state.get(f"time_{rid}", row["Time"]))
+            old_time = _parse_time_safe(row["Time"])
+            if new_time is not None and old_time is not None and new_time != old_time:
+                cascade_deltas[idx] = new_time - old_time
+
+        # Sync every row's plain field values from the widgets (Date/Activity/Type/Notes,
+        # and Time itself before any cascade adjustment below).
+        for idx, row in enumerate(rows_list):
+            rid = row["_id"]
+            row["Date"] = st.session_state.get(f"date_{rid}", row["Date"])
+            row["Time"] = st.session_state.get(f"time_{rid}", row["Time"])
+            row["Activity"] = st.session_state.get(f"activity_{rid}", row["Activity"])
+            row["Type"] = st.session_state.get(f"type_{rid}", row["Type"])
+            row["Notes"] = st.session_state.get(f"notes_{rid}", row["Notes"])
+
+        needs_rerun = False
+
+        if cascade_deltas:
+            # Apply each detected delta to every later-in-list row on the same date -
+            # "later" means later in this explicit list order, matching how rows are now
+            # positioned (via insert-after), not a re-derived time sort.
+            for edited_idx, delta in cascade_deltas.items():
+                edited_date = rows_list[edited_idx]["Date"]
+                for later_idx in range(edited_idx + 1, len(rows_list)):
+                    if rows_list[later_idx]["Date"] != edited_date:
+                        continue
+                    t = _parse_time_safe(rows_list[later_idx]["Time"])
+                    if t is None:
+                        continue
+                    shifted = max(0, min(23 * 60 + 59, t + delta))
+                    new_time_str = f"{shifted // 60:02d}:{shifted % 60:02d}"
+                    rows_list[later_idx]["Time"] = new_time_str
+                    st.session_state[f"time_{rows_list[later_idx]['_id']}"] = new_time_str
+            needs_rerun = True
+
+        if insert_after_idx is not None:
+            new_row = {
+                "_id": _new_row_id(),
+                "Date": rows_list[insert_after_idx]["Date"],
+                "Time": "", "Activity": "", "Type": "Activity", "Notes": "",
+            }
+            rows_list.insert(insert_after_idx + 1, new_row)
+            needs_rerun = True
+
+        if delete_idx is not None:
+            removed = rows_list.pop(delete_idx)
+            for prefix in ("date_", "time_", "activity_", "type_", "notes_"):
+                st.session_state.pop(f"{prefix}{removed['_id']}", None)
+            needs_rerun = True
+
+        st.session_state["stage3_rows"] = rows_list
+
+        if needs_rerun:
             st.rerun()
-        else:
-            st.session_state["stage3_df"] = edited_df
 
-        csv3 = st.session_state["stage3_df"].to_csv(index=False).encode("utf-8")
+        export_df = pd.DataFrame([
+            {"Date": r["Date"], "Time": r["Time"], "Activity": r["Activity"], "Type": r["Type"], "Notes": r["Notes"]}
+            for r in rows_list
+        ])
+        csv3 = export_df.to_csv(index=False).encode("utf-8")
         st.download_button("Download Stage 3 as CSV", csv3, "timewise_itinerary.csv", "text/csv")
+        

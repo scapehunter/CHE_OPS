@@ -226,7 +226,7 @@ def compute_addable_slots(days, locked_slots, start_date, end_date, arrival_time
     return addable
 
 
-def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_slot_starts):
+def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_slot_starts, accommodation_details=None):
     """
     Merges Stage 1's exact-timed logistics events with Stage 2's slot-level activities
     into one chronologically sorted timewise itinerary.
@@ -242,17 +242,31 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
       This is an assumption, not something the person stated explicitly - it's stored in
       rules.json so it can be corrected without a code change.
 
+    accommodation_details: string used to label the "transfer back" rows for items that
+      require a transfer - e.g. "Transfer back to Nirvana Shillong" - falls back to a
+      generic "accommodation" if not given.
+
     For each (date, slot) group of Stage 2 items, sequenced in insertion order starting
-    from default_slot_starts[slot]: if an item needs a transfer, a "Transfer to X" row is
-    emitted first (transfer_minutes long), then the item itself (duration_minutes long).
-    A "Meal" kind is snapped forward to its rule's window_start if it would otherwise
-    start earlier, and flagged with a note if it would start after the window closes.
+    from default_slot_starts[slot]. An item WITHOUT a transfer is a single row, as before.
+    An item WITH a transfer expands into five rows - e.g. for an 11:00 start, 30 min
+    transfer, 30 min duration:
+      Transfer to X       - 11:00
+      Arrival at X        - 11:30
+      X finished          - 12:00
+      Transfer back to Y  - 12:00
+      Arrival at Y        - 12:30
+    A "Meal" kind is snapped forward to its rule's window_start if the moment it would
+    actually start (i.e. after any transfer, not when the transfer begins) is earlier
+    than that, and flagged with a note if it would start after the window closes -
+    the whole chain (including the preceding transfer-to time) shifts together so the
+    transfer duration itself stays correct.
 
     Returns a list of {"Date": str, "Time": str, "Activity": str, "Type": str, "Notes":
     str} rows, sorted chronologically across the whole plan (locked Stage 1 slots and
     open Stage 2 slots never overlap in practice, by construction of compute_addable_slots,
     so there's no ordering ambiguity between the two sources within a single slot).
     """
+    accommodation_label = accommodation_details or "accommodation"
     rows = []
     for event in timed_events:
         rows.append({"dt": event["datetime"], "Activity": event["label"], "Type": event["type"], "Notes": ""})
@@ -270,12 +284,9 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
         running_dt = datetime.combine(day_date, datetime.min.time()) + timedelta(minutes=start_minutes)
 
         for a in activities_sorted:
-            if a["transfer_required"] and a["transfer_minutes"]:
-                rows.append({
-                    "dt": running_dt, "Activity": f"Transfer to {a['name']}",
-                    "Type": "Road Transfer", "Notes": "",
-                })
-                running_dt += timedelta(minutes=a["transfer_minutes"])
+            has_transfer = bool(a["transfer_required"] and a["transfer_minutes"])
+            transfer_to_dt = running_dt
+            start_dt = running_dt + timedelta(minutes=a["transfer_minutes"]) if has_transfer else running_dt
 
             note = ""
             if a["kind"] == "Meal":
@@ -285,13 +296,28 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
                         minutes=_parse_hhmm(meal_rule["window_start"]))
                     window_end_dt = datetime.combine(day_date, datetime.min.time()) + timedelta(
                         minutes=_parse_hhmm(meal_rule["window_end"]))
-                    if running_dt < window_start_dt:
-                        running_dt = window_start_dt
-                    if running_dt > window_end_dt:
+                    if start_dt < window_start_dt:
+                        # Shift the whole chain (including the transfer-to time) forward
+                        # together, so the transfer duration itself stays correct.
+                        shift = window_start_dt - start_dt
+                        start_dt = window_start_dt
+                        transfer_to_dt = transfer_to_dt + shift
+                    if start_dt > window_end_dt:
                         note = f"⚠️ outside usual {a['name']} window ({meal_rule['window_start']}-{meal_rule['window_end']})"
 
-            rows.append({"dt": running_dt, "Activity": a["name"], "Type": a["kind"], "Notes": note})
-            running_dt += timedelta(minutes=a["duration_minutes"])
+            if has_transfer:
+                rows.append({"dt": transfer_to_dt, "Activity": f"Transfer to {a['name']}", "Type": "Road Transfer", "Notes": ""})
+                rows.append({"dt": start_dt, "Activity": f"Arrival at {a['name']}", "Type": "Road Transfer", "Notes": note})
+                finished_dt = start_dt + timedelta(minutes=a["duration_minutes"])
+                rows.append({"dt": finished_dt, "Activity": f"{a['name']} finished", "Type": a["kind"], "Notes": ""})
+                transfer_back_dt = finished_dt
+                rows.append({"dt": transfer_back_dt, "Activity": f"Transfer back to {accommodation_label}", "Type": "Road Transfer", "Notes": ""})
+                arrival_back_dt = transfer_back_dt + timedelta(minutes=a["transfer_minutes"])
+                rows.append({"dt": arrival_back_dt, "Activity": f"Arrival at {accommodation_label}", "Type": "Road Transfer", "Notes": ""})
+                running_dt = arrival_back_dt
+            else:
+                rows.append({"dt": start_dt, "Activity": a["name"], "Type": a["kind"], "Notes": note})
+                running_dt = start_dt + timedelta(minutes=a["duration_minutes"])
 
     rows.sort(key=lambda r: r["dt"])
     return [
@@ -303,4 +329,5 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
             "Notes": r["Notes"],
         }
         for r in rows
-    ] 
+    ]
+    
