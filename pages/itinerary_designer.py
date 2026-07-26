@@ -1,10 +1,11 @@
-from datetime import date, time
+from datetime import date, time, datetime
 
 import pandas as pd
 import streamlit as st
 
 from itinerary_logic import (
-    build_stage1_grid, build_stage3_timeline, compute_addable_slots, get_program, load_rules,
+    build_stage1_grid, build_stage3_timeline, compute_addable_slots,
+    expand_activity_or_meal, get_program, load_rules,
 )
 
 st.title("🗺️ Itinerary Designer")
@@ -161,18 +162,32 @@ if "stage1_grid" in st.session_state:
 
         transfer_required = st.checkbox("Transfer required?")
         transfer_minutes = None
+        meal_stop_required = False
+        meal_stop_minutes = None
         if transfer_required:
             transfer_minutes = st.number_input("Transfer time (minutes) *", min_value=0, value=30, step=15)
+            if kind == "Activity":
+                meal_stop_required = st.checkbox("Meal stop needed during this transfer?")
+                if meal_stop_required:
+                    meal_stop_minutes = st.number_input(
+                        "Meal stop duration (minutes) *", min_value=0, value=30, step=5,
+                        help="Extends the whole transfer (both ways) by this much - e.g. a 60 min "
+                             "transfer with a 30 min meal stop becomes 90 min each way.",
+                    )
 
         if st.button("Save"):
             if not name:
                 st.warning(f"{'Activity Name' if kind == 'Activity' else 'Meal'} is required.")
             elif transfer_required and not transfer_minutes:
                 st.warning("Enter a transfer time, or uncheck 'Transfer required'.")
+            elif meal_stop_required and not meal_stop_minutes:
+                st.warning("Enter a meal stop duration, or uncheck 'Meal stop needed'.")
             else:
                 entry_text = f"[{kind}] {name} ({duration_minutes} min)"
                 if transfer_required:
                     entry_text += f" | Transfer: {transfer_minutes} min"
+                    if meal_stop_required:
+                        entry_text += f" (+{meal_stop_minutes} min meal stop)"
                 for d in st.session_state["stage1_grid"]["days"]:
                     if d["date"] == day_date:
                         existing = d[slot_name]
@@ -183,6 +198,7 @@ if "stage1_grid" in st.session_state:
                     "order": len(st.session_state["stage2_activities"]),
                     "kind": kind, "name": name, "duration_minutes": duration_minutes,
                     "transfer_required": transfer_required, "transfer_minutes": transfer_minutes,
+                    "meal_stop_required": meal_stop_required, "meal_stop_minutes": meal_stop_minutes,
                 })
                 st.rerun()
 
@@ -238,21 +254,33 @@ if "stage1_grid" in st.session_state:
                 meal_rules, rules_data["default_slot_starts"],
                 accommodation_details=accommodation_details,
             )
-            st.session_state["stage3_df"] = pd.DataFrame(rows)
-            st.session_state.pop("stage3_editor", None)
-            st.session_state.pop("pending_shift", None)
+            stage3_dfs = {}
+            for d in grid["days"]:
+                date_label = d["date"].strftime("%d %b %Y")
+                day_rows = [
+                    {"Time": r["Time"], "Activity": r["Activity"], "Type": r["Type"], "Notes": r["Notes"]}
+                    for r in rows if r["Date"] == date_label
+                ]
+                stage3_dfs[d["date"].isoformat()] = pd.DataFrame(
+                    day_rows, columns=["Time", "Activity", "Type", "Notes"]
+                )
+            st.session_state["stage3_dfs"] = stage3_dfs
+            # Clear any per-day widget/dialog/pending-shift state left over from a
+            # previous generation.
+            for k in list(st.session_state.keys()):
+                if k.startswith(("stage3_editor_", "pending_shift_", "show_insert_dialog_")):
+                    del st.session_state[k]
 
-    if "stage3_df" in st.session_state:
+    if "stage3_dfs" in st.session_state:
         st.subheader("Stage 3: Timewise Itinerary")
         st.caption(
-            "Dates can't be changed - pick from the plan's existing dates only. Everything else "
-            "is directly editable, worksheet-style. Use ➕ Insert Row to add a row at a precise "
-            "position (not just the end); the table's own row-delete (available when you select a "
-            "row) removes one. Editing a Time does NOT automatically shift later rows - if you want "
-            "that, an explicit prompt appears below the table after you make the edit."
+            "One table per day - dates never appear as an editable field since each table "
+            "already belongs to a single day. Everything else is directly editable, "
+            "worksheet-style. Use ➕ Insert Row to add a row at a precise position (not just "
+            "the end); the table's own row-delete (select a row) removes one. Editing a Time "
+            "does NOT automatically shift later rows in that day - an explicit prompt appears "
+            "below that day's table after you make the edit."
         )
-
-        valid_dates = [d["date"].strftime("%d %b %Y") for d in grid["days"]]
 
         def _parse_time_safe(s):
             try:
@@ -261,117 +289,178 @@ if "stage1_grid" in st.session_state:
             except (ValueError, AttributeError):
                 return None
 
-        def _refresh_editor():
-            # Forces st.data_editor to fully rebind to the current canonical stage3_df
-            # rather than resolving against whatever it first bound to under this key -
-            # needed any time stage3_df is changed programmatically (insert, shift apply).
-            st.session_state.pop("stage3_editor", None)
-
-        col_insert, col_download = st.columns([1, 3])
-        with col_insert:
-            if st.button("➕ Insert Row"):
-                st.session_state["show_insert_dialog"] = True
-
-        current_df = st.session_state["stage3_df"]
-
-        @st.dialog("Insert Row")
-        def insert_row_dialog():
-            options = ["At the very start"] + [
-                f"After row {i + 1}: {r['Time']} — {r['Activity']}" for i, r in current_df.iterrows()
-            ]
-            position_label = st.selectbox("Position", options)
-            position_idx = 0 if position_label == "At the very start" else options.index(position_label)
-
-            new_date = st.selectbox("Date", valid_dates)
-            new_time = st.text_input("Time", placeholder="HH:MM")
-            new_activity = st.text_input("Activity *")
-            new_type = st.text_input("Type", value="Activity")
-            new_notes = st.text_input("Notes")
-
-            if st.button("Insert"):
-                if not new_activity:
-                    st.warning("Activity is required.")
-                else:
-                    new_row = {"Date": new_date, "Time": new_time, "Activity": new_activity,
-                               "Type": new_type, "Notes": new_notes}
-                    df = st.session_state["stage3_df"]
-                    top = df.iloc[:position_idx]
-                    bottom = df.iloc[position_idx:]
-                    st.session_state["stage3_df"] = pd.concat(
-                        [top, pd.DataFrame([new_row]), bottom], ignore_index=True
-                    )
-                    _refresh_editor()
-                    st.session_state["show_insert_dialog"] = False
-                    st.rerun()
-
-        if st.session_state.get("show_insert_dialog"):
-            insert_row_dialog()
-
-        edited_df = st.data_editor(
-            current_df,
-            key="stage3_editor",
-            num_rows="dynamic",
-            use_container_width=True,
-            column_config={
-                "Date": st.column_config.SelectboxColumn("Date", options=valid_dates, required=True),
-                "Time": st.column_config.TextColumn("Time", help="24-hour HH:MM"),
-            },
-        )
-
-        # Detect a Time change on an existing row (matched by index - untouched by
-        # inserts/deletes, which change the row count instead) to offer the optional
-        # shift-later-rows action. This never auto-applies - only an explicit click below does.
-        shift_candidate = None
-        for i in current_df.index:
-            if i not in edited_df.index:
+        for d in grid["days"]:
+            date_iso = d["date"].isoformat()
+            date_label = d["date"].strftime("%d %b %Y")
+            if date_iso not in st.session_state["stage3_dfs"]:
                 continue
-            old_t = _parse_time_safe(current_df.loc[i, "Time"])
-            new_t = _parse_time_safe(edited_df.loc[i, "Time"])
-            old_date = current_df.loc[i, "Date"]
-            new_date = edited_df.loc[i, "Date"]
-            if old_t is not None and new_t is not None and new_t != old_t and old_date == new_date:
-                shift_candidate = {"row_index": i, "date": old_date, "delta": new_t - old_t,
-                                    "activity": edited_df.loc[i, "Activity"]}
-                break  # only the first detected change - data_editor reruns per single edit anyway
 
-        # Save the edit as-is regardless (a normal edit always just works, same as a
-        # spreadsheet) - the shift is a separate, optional follow-up action.
-        st.session_state["stage3_df"] = edited_df
+            st.markdown(f"#### {d['label']}")
 
-        if shift_candidate:
-            st.session_state["pending_shift"] = shift_candidate
+            editor_key = f"stage3_editor_{date_iso}"
+            insert_flag_key = f"show_insert_dialog_{date_iso}"
+            pending_key = f"pending_shift_{date_iso}"
 
-        pending = st.session_state.get("pending_shift")
-        if pending:
-            sign = "+" if pending["delta"] > 0 else ""
-            st.info(
-                f"Time for **{pending['activity']}** changed by {sign}{pending['delta']} min. "
-                f"Apply the same shift to every later row on {pending['date']}?"
+            col_insert, col_download = st.columns([1, 3])
+            with col_insert:
+                if st.button("➕ Insert Row", key=f"insert_btn_{date_iso}"):
+                    st.session_state[insert_flag_key] = True
+
+            current_df = st.session_state["stage3_dfs"][date_iso]
+
+            @st.dialog(f"Insert Row — {date_label}")
+            def insert_row_dialog(date_iso=date_iso, day_date=d["date"], editor_key=editor_key, insert_flag_key=insert_flag_key):
+                df = st.session_state["stage3_dfs"][date_iso]
+                options = ["At the very start"] + [
+                    f"After row {i + 1}: {r['Time']} — {r['Activity']}" for i, r in df.iterrows()
+                ]
+                position_label = st.selectbox("Position", options)
+                position_idx = 0 if position_label == "At the very start" else options.index(position_label)
+
+                kind = st.radio("Type", ["Activity", "Meal"], horizontal=True)
+                if kind == "Meal":
+                    name = st.selectbox("Meal", meal_names)
+                    duration_minutes = st.number_input(
+                        "Duration (minutes) *", min_value=0, value=meal_duration_by_name.get(name, 30), step=5
+                    )
+                else:
+                    name = st.text_input("Activity Name *")
+                    duration_minutes = st.number_input("Duration (minutes) *", min_value=0, value=60, step=15)
+
+                anchor_time_str = st.text_input("Time *", placeholder="HH:MM")
+
+                transfer_required = st.checkbox("Transfer required?")
+                transfer_minutes = None
+                meal_stop_required = False
+                meal_stop_minutes = None
+                if transfer_required:
+                    transfer_minutes = st.number_input("Transfer time (minutes) *", min_value=0, value=30, step=15)
+                    if kind == "Activity":
+                        meal_stop_required = st.checkbox("Meal stop needed during this transfer?")
+                        if meal_stop_required:
+                            meal_stop_minutes = st.number_input(
+                                "Meal stop duration (minutes) *", min_value=0, value=30, step=5,
+                                help="Extends the whole transfer (both ways) by this much.",
+                            )
+
+                if st.button("Insert"):
+                    parsed_time = None
+                    if anchor_time_str:
+                        try:
+                            hh, mm = map(int, anchor_time_str.strip().split(":"))
+                            parsed_time = time(hh, mm)
+                        except (ValueError, TypeError):
+                            parsed_time = None
+
+                    if not name:
+                        st.warning(f"{'Activity Name' if kind == 'Activity' else 'Meal'} is required.")
+                    elif parsed_time is None:
+                        st.warning("Enter a valid Time (HH:MM).")
+                    elif transfer_required and not transfer_minutes:
+                        st.warning("Enter a transfer time, or uncheck 'Transfer required'.")
+                    elif meal_stop_required and not meal_stop_minutes:
+                        st.warning("Enter a meal stop duration, or uncheck 'Meal stop needed'.")
+                    else:
+                        anchor_dt = datetime.combine(day_date, parsed_time)
+                        new_rows, _ = expand_activity_or_meal(
+                            anchor_dt, day_date, kind, name, duration_minutes,
+                            transfer_required, transfer_minutes,
+                            meal_stop_required, meal_stop_minutes,
+                            meal_rules, accommodation_details,
+                        )
+                        new_rows_formatted = pd.DataFrame([
+                            {"Time": r["dt"].strftime("%H:%M"), "Activity": r["Activity"],
+                             "Type": r["Type"], "Notes": r["Notes"]}
+                            for r in new_rows
+                        ])
+                        df2 = st.session_state["stage3_dfs"][date_iso]
+                        top = df2.iloc[:position_idx]
+                        bottom = df2.iloc[position_idx:]
+                        st.session_state["stage3_dfs"][date_iso] = pd.concat(
+                            [top, new_rows_formatted, bottom], ignore_index=True
+                        )
+                        st.session_state.pop(editor_key, None)
+                        st.session_state[insert_flag_key] = False
+                        st.rerun()
+
+            if st.session_state.get(insert_flag_key):
+                insert_row_dialog()
+
+            edited_df = st.data_editor(
+                current_df,
+                key=editor_key,
+                num_rows="dynamic",
+                use_container_width=True,
+                column_config={"Time": st.column_config.TextColumn("Time", help="24-hour HH:MM")},
             )
-            col_apply, col_dismiss = st.columns([1, 1])
-            with col_apply:
-                if st.button("⏩ Apply shift to later rows"):
-                    df = st.session_state["stage3_df"]
-                    row_idx = pending["row_index"]
-                    delta = pending["delta"]
-                    date = pending["date"]
-                    for j in df.index:
-                        if j <= row_idx or df.loc[j, "Date"] != date:
-                            continue
-                        t = _parse_time_safe(df.loc[j, "Time"])
-                        if t is None:
-                            continue
-                        shifted = max(0, min(23 * 60 + 59, t + delta))
-                        df.loc[j, "Time"] = f"{shifted // 60:02d}:{shifted % 60:02d}"
-                    st.session_state["stage3_df"] = df
-                    st.session_state.pop("pending_shift", None)
-                    _refresh_editor()
-                    st.rerun()
-            with col_dismiss:
-                if st.button("Dismiss"):
-                    st.session_state.pop("pending_shift", None)
-                    st.rerun()
 
-        with col_download:
-            csv3 = st.session_state["stage3_df"].to_csv(index=False).encode("utf-8")
-            st.download_button("Download Stage 3 as CSV", csv3, "timewise_itinerary.csv", "text/csv")
+            shift_candidate = None
+            for i in current_df.index:
+                if i not in edited_df.index:
+                    continue
+                old_t = _parse_time_safe(current_df.loc[i, "Time"])
+                new_t = _parse_time_safe(edited_df.loc[i, "Time"])
+                if old_t is not None and new_t is not None and new_t != old_t:
+                    shift_candidate = {"row_index": i, "delta": new_t - old_t,
+                                        "activity": edited_df.loc[i, "Activity"]}
+                    break
+
+            st.session_state["stage3_dfs"][date_iso] = edited_df
+
+            if shift_candidate:
+                st.session_state[pending_key] = shift_candidate
+
+            pending = st.session_state.get(pending_key)
+            if pending:
+                sign = "+" if pending["delta"] > 0 else ""
+                st.info(
+                    f"Time for **{pending['activity']}** changed by {sign}{pending['delta']} min. "
+                    f"Apply the same shift to every later row on {date_label}?"
+                )
+                col_apply, col_dismiss = st.columns([1, 1])
+                with col_apply:
+                    if st.button("⏩ Apply shift to later rows", key=f"apply_{date_iso}"):
+                        df3 = st.session_state["stage3_dfs"][date_iso]
+                        row_idx = pending["row_index"]
+                        delta = pending["delta"]
+                        for j in df3.index:
+                            if j <= row_idx:
+                                continue
+                            t = _parse_time_safe(df3.loc[j, "Time"])
+                            if t is None:
+                                continue
+                            shifted = max(0, min(23 * 60 + 59, t + delta))
+                            df3.loc[j, "Time"] = f"{shifted // 60:02d}:{shifted % 60:02d}"
+                        st.session_state["stage3_dfs"][date_iso] = df3
+                        st.session_state.pop(pending_key, None)
+                        st.session_state.pop(editor_key, None)
+                        st.rerun()
+                with col_dismiss:
+                    if st.button("Dismiss", key=f"dismiss_{date_iso}"):
+                        st.session_state.pop(pending_key, None)
+                        st.rerun()
+
+            with col_download:
+                day_csv = st.session_state["stage3_dfs"][date_iso].to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    f"Download {date_label} as CSV", day_csv, f"itinerary_{date_iso}.csv",
+                    "text/csv", key=f"dl_{date_iso}",
+                )
+
+            st.divider()
+
+        combined_parts = []
+        for d in grid["days"]:
+            date_iso = d["date"].isoformat()
+            if date_iso in st.session_state["stage3_dfs"]:
+                day_df = st.session_state["stage3_dfs"][date_iso].copy()
+                day_df.insert(0, "Date", d["date"].strftime("%d %b %Y"))
+                combined_parts.append(day_df)
+        if combined_parts:
+            combined_df = pd.concat(combined_parts, ignore_index=True)
+            combined_csv = combined_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "📥 Download Combined Timewise Itinerary (all days)",
+                combined_csv, "timewise_itinerary_combined.csv", "text/csv",
+            )
+            
