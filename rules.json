@@ -21,6 +21,34 @@
       "anchor": "flight_arrival",
       "offset_minutes": 60,
       "type": "Road Transfer"
+    },
+    {
+      "id": "hotel_checkin_process",
+      "label": "Check-in process",
+      "anchor": "hotel_arrival",
+      "offset_minutes": 0,
+      "type": "Check-in"
+    },
+    {
+      "id": "safety_briefing",
+      "label": "Property safety briefing",
+      "anchor": "hotel_arrival",
+      "offset_minutes": 15,
+      "type": "Briefing"
+    },
+    {
+      "id": "bags_assembly",
+      "label": "Assembly with bags ready for loading",
+      "anchor": "depart_for_airport",
+      "offset_minutes": -30,
+      "type": "Assembly"
+    },
+    {
+      "id": "checkout",
+      "label": "Check-out",
+      "anchor": "depart_for_airport",
+      "offset_minutes": -20,
+      "type": "Check-out"
     }
   ],
   "time_slots": [
@@ -299,7 +327,8 @@
 
   "transfer_rules": {
     "washroom_break_threshold_minutes": 120,
-    "washroom_break_note": "A transfer longer than this threshold should include a washroom break.",
+    "washroom_break_minutes": 20,
+    "washroom_break_note": "A transfer longer than this threshold should include a washroom break; washroom_break_minutes is added to the transfer duration itself, not just noted.",
     "meal_overlap_note": "If a transfer overlaps a meal window (see meal_rules), it requires either a meal stop at a pre-identified place, or a packed meal for the group.",
     "applies_to": ["transfer", "activity"]
   },
