@@ -365,6 +365,8 @@
     ]
   },
   "_comment_transfer_rules": "Same overlap logic applies during activities, not just transfers - applies_to lists which kinds of blocks this rule should be checked against once a scheduling stage is built. These are general rules, unless a specific plan/day calls for an exception.",
+  "cascade_buffer_minutes": 5,
+  "_comment_cascade_buffer_minutes": "When inserting a Stage 3 activity/meal pushes an existing item later, this is the gap left between the new item and whatever it displaces (e.g. a 60 min activity that bumps a later item doesn't leave that item starting the instant it ends). Applied once per insertion, not compounded across a chain of multiple displaced items.",
   "coordinates": {
     "airports": {
       "Leh": {

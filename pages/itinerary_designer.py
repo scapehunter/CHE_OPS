@@ -405,7 +405,10 @@ if "stage1_grid" in st.session_state:
                                 "order": group_df["_order"].iloc[0],
                             }
 
-                        group_shifts = compute_cascade_shifts(existing_groups, anchor_minutes, end_minutes)
+                        group_shifts = compute_cascade_shifts(
+                            existing_groups, anchor_minutes, end_minutes,
+                            buffer_minutes=rules_data.get("cascade_buffer_minutes", 5),
+                        )
                         # Applied immediately, not stored as a pending action - inserting
                         # a row always leaves the day's table internally consistent on
                         # its own, no separate confirmation click needed.
@@ -568,4 +571,3 @@ if "stage1_grid" in st.session_state:
                 "📥 Download Combined Timewise Itinerary (all days)",
                 combined_csv, "timewise_itinerary_combined.csv", "text/csv",
             )
-            

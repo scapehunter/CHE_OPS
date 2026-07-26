@@ -423,39 +423,50 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
     ]
 
 
-def compute_cascade_shifts(existing_groups, new_start_minutes, new_end_minutes):
+def compute_cascade_shifts(existing_groups, new_start_minutes, new_end_minutes, buffer_minutes=5):
     """
     existing_groups: dict of group_id -> {"start": int minutes, "end": int minutes,
       "order": int} for every OTHER group currently in a Stage 3 day's table (not the
-      group that was just inserted) - pass everything, including groups entirely before
-      new_start_minutes; those are filtered out internally and never affected.
+      group that was just inserted) - pass everything; groups that don't genuinely
+      overlap the new item's span are filtered out internally and never affected.
     new_start_minutes/new_end_minutes: the [start, end) span of the just-inserted item.
+    buffer_minutes: gap left between the new item and whatever it displaces - e.g. a
+      60 min activity that pushes a later item doesn't leave that item starting the
+      instant it ends, it leaves a 5 minute gap by default. Applied once, between the
+      new item and the first displaced item - items chained together after that sit
+      back to back with no extra gap between them, so the buffer doesn't compound and
+      reach further than the actual disruption warrants.
 
     Two-phase cascade:
     Phase 1 (chronological ripple) - walk existing groups in chronological order (by
     current start time) to determine which ones are actually disrupted by the new item,
-    and how far the disruption reaches. A group is disrupted if it would otherwise start
-    before the "floor" established by everything disrupted before it. This correctly
-    finds the disruption's reach - e.g. it might disturb the next two items but leave a
-    third alone if there was already enough of a gap to absorb the push - without yet
-    deciding the disrupted items' final order.
+    and how far the disruption reaches. A group is a candidate if its span genuinely
+    overlaps the new item's - this includes a group that started BEFORE the new item but
+    extends into it (its end time is past the new item's start), not just groups that
+    start at/after the new item. Once a candidate is disrupted, it (and everything it
+    displaces) helps push the floor further; the ripple stops as soon as a later group
+    already had enough of a gap to absorb it, without deciding final order yet.
 
     Phase 2 (insertion-order layout) - the disrupted set from phase 1 is laid out, back
-    to back, starting right after the new item ends, in the order those items were
-    originally added to the plan (their "order"), not their original scheduled time.
-    Each item keeps its own original duration. This is the behavior actually wanted: if
-    two later, distinct items both end up needing to move as a result of one insertion,
-    whichever was added to the plan earlier is scheduled first in the resulting gap.
+    to back, starting right after the new item ends plus the buffer, in the order those
+    items were originally added to the plan (their "order"), not their original
+    scheduled time. Each item keeps its own original duration; no extra gap is added
+    between items within this chained group, only between the new item and the first
+    one.
 
     Returns {group_id: shift_minutes} for every group that needs to move (omitted
     entirely if a group isn't affected).
     """
     candidates = sorted(
-        (item for item in existing_groups.items() if item[1]["start"] >= new_start_minutes),
+        (
+            item for item in existing_groups.items()
+            if item[1]["start"] >= new_start_minutes
+            or (item[1]["start"] < new_end_minutes and item[1]["end"] > new_start_minutes)
+        ),
         key=lambda kv: kv[1]["start"],
     )
 
-    floor = new_end_minutes
+    floor = new_end_minutes + buffer_minutes
     affected = []
     for group_id, g in candidates:
         if g["start"] < floor:
@@ -466,7 +477,7 @@ def compute_cascade_shifts(existing_groups, new_start_minutes, new_end_minutes):
 
     affected_by_insertion_order = sorted(affected, key=lambda gid: existing_groups[gid]["order"])
     shifts = {}
-    floor = new_end_minutes
+    floor = new_end_minutes + buffer_minutes
     for group_id in affected_by_insertion_order:
         g = existing_groups[group_id]
         duration = g["end"] - g["start"]
@@ -475,5 +486,3 @@ def compute_cascade_shifts(existing_groups, new_start_minutes, new_end_minutes):
         floor = new_group_start + duration
 
     return shifts
-
-    
