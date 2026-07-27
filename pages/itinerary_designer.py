@@ -5,7 +5,7 @@ import streamlit as st
 
 from itinerary_logic import (
     build_stage1_grid, build_stage3_timeline, compute_addable_slots, compute_cascade_shifts,
-    expand_activity_or_meal, fill_missing_meals, get_program, load_rules,
+    expand_activity_or_meal, fill_missing_meals, flag_time_sensitive_deviations, get_program, load_rules,
 )
 
 st.title("🗺️ Itinerary Designer")
@@ -175,6 +175,13 @@ if "stage1_grid" in st.session_state:
                              "transfer with a 30 min meal stop becomes 90 min each way.",
                     )
 
+        time_sensitive = st.checkbox(
+            "Time sensitive?",
+            help="Please mark this only if you are sure of the time. If this item's time "
+                 "later drifts (from a cascade or an edit), it gets flagged once in the "
+                 "Stage 3 Notes column.",
+        )
+
         if st.button("Save"):
             if not name:
                 st.warning(f"{'Activity Name' if kind == 'Activity' else 'Meal'} is required.")
@@ -199,6 +206,7 @@ if "stage1_grid" in st.session_state:
                     "kind": kind, "name": name, "duration_minutes": duration_minutes,
                     "transfer_required": transfer_required, "transfer_minutes": transfer_minutes,
                     "meal_stop_required": meal_stop_required, "meal_stop_minutes": meal_stop_minutes,
+                    "time_sensitive": time_sensitive,
                 })
                 st.rerun()
 
@@ -265,11 +273,13 @@ if "stage1_grid" in st.session_state:
                 date_label = d["date"].strftime("%d %b %Y")
                 day_rows = [
                     {"Time": r["Time"], "Activity": r["Activity"], "Type": r["Type"], "Notes": r["Notes"],
-                     "_group": r["_group"], "_order": r["_order"]}
+                     "_group": r["_group"], "_order": r["_order"],
+                     "_time_sensitive": r["_time_sensitive"], "_original_time": r["_original_time"]}
                     for r in rows if r["Date"] == date_label
                 ]
                 stage3_dfs[d["date"].isoformat()] = pd.DataFrame(
-                    day_rows, columns=["Time", "Activity", "Type", "Notes", "_group", "_order"]
+                    day_rows, columns=["Time", "Activity", "Type", "Notes", "_group", "_order",
+                                        "_time_sensitive", "_original_time"]
                 )
             st.session_state["stage3_dfs"] = stage3_dfs
             # Every future Stage 3 insertion needs an _order higher than anything already
@@ -347,6 +357,13 @@ if "stage1_grid" in st.session_state:
                                 help="Extends the whole transfer (both ways) by this much.",
                             )
 
+                time_sensitive = st.checkbox(
+                    "Time sensitive?",
+                    help="Please mark this only if you are sure of the time. If this item's "
+                         "time later drifts (from a cascade or an edit), it gets flagged once "
+                         "in the Notes column.",
+                )
+
                 col_insert_btn, col_cancel_btn = st.columns([1, 1])
                 submitted = col_insert_btn.button("Insert")
                 cancelled = col_cancel_btn.button("Cancel")
@@ -378,6 +395,7 @@ if "stage1_grid" in st.session_state:
                             transfer_required, transfer_minutes,
                             meal_stop_required, meal_stop_minutes,
                             meal_rules, accommodation_details,
+                            time_sensitive=time_sensitive,
                         )
                         new_group = st.session_state["stage3_group_counter"]
                         new_order = st.session_state["stage3_order_counter"]
@@ -385,7 +403,8 @@ if "stage1_grid" in st.session_state:
                         st.session_state["stage3_order_counter"] += 1
                         new_rows_formatted = pd.DataFrame([
                             {"Time": r["dt"].strftime("%H:%M"), "Activity": r["Activity"],
-                             "Type": r["Type"], "Notes": r["Notes"], "_group": new_group, "_order": new_order}
+                             "Type": r["Type"], "Notes": r["Notes"], "_group": new_group, "_order": new_order,
+                             "_time_sensitive": r["_time_sensitive"], "_original_time": r["_original_time"]}
                             for r in new_rows
                         ])
 
@@ -427,6 +446,10 @@ if "stage1_grid" in st.session_state:
                                     shifted = max(0, min(23 * 60 + 59, t + group_shifts[gid]))
                                     df2.loc[row_idx, "Time"] = f"{shifted // 60:02d}:{shifted % 60:02d}"
 
+                        # Any time-sensitive row that just got pushed by this cascade gets
+                        # its one-time drift warning here, before merging in the new rows.
+                        df2 = flag_time_sensitive_deviations(df2)
+
                         combined = pd.concat([df2, new_rows_formatted], ignore_index=True)
                         combined["_sort_key"] = combined["Time"].apply(_parse_time_safe)
                         # Rows with an unparseable time (shouldn't normally happen here,
@@ -453,17 +476,23 @@ if "stage1_grid" in st.session_state:
                     "Time": st.column_config.TextColumn("Time", help="24-hour HH:MM"),
                     "_group": {"hidden": True},
                     "_order": {"hidden": True},
+                    "_time_sensitive": {"hidden": True},
+                    "_original_time": {"hidden": True},
                 },
             )
 
             # A row added via the table's own native "+" (not the Insert Row dialog)
             # won't have a _group/_order yet - give it fresh ones so future cascades
             # still know how to treat it (as its own single-row group, added just now).
+            # It also isn't time-sensitive by default, since there's no checkbox for it
+            # in the native add-row flow.
             missing_meta = edited_df["_group"].isna()
             if missing_meta.any():
                 for idx in edited_df.index[missing_meta]:
                     edited_df.loc[idx, "_group"] = st.session_state["stage3_group_counter"]
                     edited_df.loc[idx, "_order"] = st.session_state["stage3_order_counter"]
+                    edited_df.loc[idx, "_time_sensitive"] = False
+                    edited_df.loc[idx, "_original_time"] = None
                     st.session_state["stage3_group_counter"] += 1
                     st.session_state["stage3_order_counter"] += 1
 
@@ -478,6 +507,10 @@ if "stage1_grid" in st.session_state:
                                         "activity": edited_df.loc[i, "Activity"]}
                     break
 
+            # Catches any direct hand-edit to a time-sensitive row's Time cell, in
+            # addition to whatever the cascade paths already flag - deliberately fires
+            # on any deviation regardless of cause.
+            edited_df = flag_time_sensitive_deviations(edited_df)
             st.session_state["stage3_dfs"][date_iso] = edited_df
 
             if shift_candidate:
@@ -543,6 +576,7 @@ if "stage1_grid" in st.session_state:
                         df3["_sort_key"] = df3["Time"].apply(_parse_time_safe)
                         df3["_sort_key"] = df3["_sort_key"].fillna(24 * 60)
                         df3 = df3.sort_values("_sort_key", kind="stable").drop(columns="_sort_key").reset_index(drop=True)
+                        df3 = flag_time_sensitive_deviations(df3)
 
                         st.session_state["stage3_dfs"][date_iso] = df3
                         st.session_state.pop(pending_key, None)
@@ -556,7 +590,7 @@ if "stage1_grid" in st.session_state:
 
             with col_download:
                 day_csv = st.session_state["stage3_dfs"][date_iso].drop(
-                    columns=["_group", "_order"]
+                    columns=["_group", "_order", "_time_sensitive", "_original_time"]
                 ).to_csv(index=False).encode("utf-8")
                 st.download_button(
                     f"Download {date_label} as CSV", day_csv, f"itinerary_{date_iso}.csv",
@@ -569,7 +603,9 @@ if "stage1_grid" in st.session_state:
         for d in grid["days"]:
             date_iso = d["date"].isoformat()
             if date_iso in st.session_state["stage3_dfs"]:
-                day_df = st.session_state["stage3_dfs"][date_iso].drop(columns=["_group", "_order"]).copy()
+                day_df = st.session_state["stage3_dfs"][date_iso].drop(
+                    columns=["_group", "_order", "_time_sensitive", "_original_time"]
+                ).copy()
                 day_df.insert(0, "Date", d["date"].strftime("%d %b %Y"))
                 combined_parts.append(day_df)
         if combined_parts:

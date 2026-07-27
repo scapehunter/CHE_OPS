@@ -154,7 +154,7 @@ def build_stage1_grid(
     locked_slots = set()
     timed_events = []
 
-    def add_entry(dt, text, event_type):
+    def add_entry(dt, text, event_type, time_sensitive=False):
         target_date = dt.date()
         spilled_note = ""
         if target_date not in day_dates:
@@ -171,14 +171,18 @@ def build_stage1_grid(
                 # ⚠️ note already flags the clamp; Stage 3 sorts by real time, and an
                 # out-of-range event sorting to its true (if odd) position is more
                 # honest than silently pretending it happened at a valid time.
-                timed_events.append({"datetime": dt, "label": text + spilled_note, "type": event_type})
+                timed_events.append({
+                    "datetime": dt, "label": text + spilled_note, "type": event_type,
+                    "_time_sensitive": time_sensitive,
+                    "_original_time": dt.strftime("%H:%M") if time_sensitive else None,
+                })
                 return
 
     arrival_dt = datetime.combine(start_date, arrival_time)
     departure_dt = datetime.combine(end_date, departure_time)
 
     # --- Arrival day ---
-    add_entry(arrival_dt, f"Arrival: {arrival_airport}, {arrival_time.strftime('%H:%M')}", "Arrival")
+    add_entry(arrival_dt, f"Arrival: {arrival_airport}, {arrival_time.strftime('%H:%M')}", "Arrival", time_sensitive=True)
 
     depart_for_program_rule = next((r for r in buffer_rules if r["id"] == "depart_for_hotel"), None)
     if depart_for_program_rule:
@@ -222,7 +226,7 @@ def build_stage1_grid(
                 t = depart_program_for_airport_dt + timedelta(minutes=rule["offset_minutes"])
                 add_entry(t, rule["label"], rule["type"])
 
-    add_entry(departure_dt, f"Departure: {departure_airport}, {departure_time.strftime('%H:%M')}", "Departure")
+    add_entry(departure_dt, f"Departure: {departure_airport}, {departure_time.strftime('%H:%M')}", "Departure", time_sensitive=True)
 
     return {
         "plan_name": plan_name, "program_location": program_location,
@@ -267,7 +271,7 @@ def expand_activity_or_meal(
     anchor_dt, day_date, kind, name, duration_minutes,
     transfer_required, transfer_minutes,
     meal_stop_required, meal_stop_minutes,
-    meal_rules, accommodation_details=None,
+    meal_rules, accommodation_details=None, time_sensitive=False,
 ):
     """
     Shared expansion logic for a single Activity or Meal entry, starting at anchor_dt.
@@ -280,8 +284,15 @@ def expand_activity_or_meal(
     transfer's duration (both legs), rather than being inserted as a separate stop -
     e.g. a 60 min transfer with a 30 min meal stop becomes a 90 min transfer each way.
 
-    Returns (rows, end_dt): rows is a list of {"dt", "Activity", "Type", "Notes"} dicts;
-    end_dt is when the next sequential item (if any) should start.
+    time_sensitive: if True, the "X starts" row (the one representing when the
+    activity/meal itself actually happens - not its surrounding transfer legs) is
+    tagged with "_time_sensitive": True and "_original_time" frozen at its
+    just-computed time. Stage 3 uses this to flag, once, if that row's time later
+    drifts from this original for any reason (a cascade, or a direct edit).
+
+    Returns (rows, end_dt): rows is a list of {"dt", "Activity", "Type", "Notes",
+    "_time_sensitive", "_original_time"} dicts; end_dt is when the next sequential item
+    (if any) should start.
 
     A "Meal" kind is snapped forward to the average (midpoint) of its rule's window if the
     moment it would actually start (i.e. after any transfer, not when the transfer begins)
@@ -327,19 +338,26 @@ def expand_activity_or_meal(
         transfer_note = ""
         if kind == "Activity" and meal_stop_required and meal_stop_minutes:
             transfer_note = f"Includes {meal_stop_minutes} min meal stop"
-        rows.append({"dt": transfer_to_dt, "Activity": f"Transfer to {name}", "Type": "Road Transfer", "Notes": transfer_note})
-        rows.append({"dt": start_dt, "Activity": f"{name} starts", "Type": kind, "Notes": note})
+        rows.append({"dt": transfer_to_dt, "Activity": f"Transfer to {name}", "Type": "Road Transfer", "Notes": transfer_note,
+                     "_time_sensitive": False, "_original_time": None})
+        rows.append({"dt": start_dt, "Activity": f"{name} starts", "Type": kind, "Notes": note,
+                     "_time_sensitive": time_sensitive, "_original_time": start_dt.strftime("%H:%M") if time_sensitive else None})
         finished_dt = start_dt + timedelta(minutes=duration_minutes)
-        rows.append({"dt": finished_dt, "Activity": f"{name} ends", "Type": kind, "Notes": ""})
+        rows.append({"dt": finished_dt, "Activity": f"{name} ends", "Type": kind, "Notes": "",
+                     "_time_sensitive": False, "_original_time": None})
         transfer_back_dt = finished_dt
-        rows.append({"dt": transfer_back_dt, "Activity": f"Transfer back to {accommodation_label}", "Type": "Road Transfer", "Notes": transfer_note})
+        rows.append({"dt": transfer_back_dt, "Activity": f"Transfer back to {accommodation_label}", "Type": "Road Transfer", "Notes": transfer_note,
+                     "_time_sensitive": False, "_original_time": None})
         arrival_back_dt = transfer_back_dt + timedelta(minutes=effective_transfer_minutes)
-        rows.append({"dt": arrival_back_dt, "Activity": f"Arrival at {accommodation_label}", "Type": "Road Transfer", "Notes": ""})
+        rows.append({"dt": arrival_back_dt, "Activity": f"Arrival at {accommodation_label}", "Type": "Road Transfer", "Notes": "",
+                     "_time_sensitive": False, "_original_time": None})
         end_dt = arrival_back_dt
     else:
-        rows.append({"dt": start_dt, "Activity": f"{name} starts", "Type": kind, "Notes": note})
+        rows.append({"dt": start_dt, "Activity": f"{name} starts", "Type": kind, "Notes": note,
+                     "_time_sensitive": time_sensitive, "_original_time": start_dt.strftime("%H:%M") if time_sensitive else None})
         end_dt = start_dt + timedelta(minutes=duration_minutes)
-        rows.append({"dt": end_dt, "Activity": f"{name} ends", "Type": kind, "Notes": ""})
+        rows.append({"dt": end_dt, "Activity": f"{name} ends", "Type": kind, "Notes": "",
+                     "_time_sensitive": False, "_original_time": None})
 
     return rows, end_dt
 
@@ -382,6 +400,8 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
         rows.append({
             "dt": event["datetime"], "Activity": event["label"], "Type": event["type"], "Notes": "",
             "_group": group_id, "_order": 0,
+            "_time_sensitive": event.get("_time_sensitive", False),
+            "_original_time": event.get("_original_time"),
         })
         group_id += 1
 
@@ -400,6 +420,7 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
                 a["transfer_required"], a["transfer_minutes"],
                 a.get("meal_stop_required", False), a.get("meal_stop_minutes"),
                 meal_rules, accommodation_details,
+                time_sensitive=a.get("time_sensitive", False),
             )
             this_group = group_id
             group_id += 1
@@ -418,6 +439,8 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
             "Notes": r["Notes"],
             "_group": r["_group"],
             "_order": r["_order"],
+            "_time_sensitive": r["_time_sensitive"],
+            "_original_time": r["_original_time"],
         }
         for r in rows
     ]
@@ -542,6 +565,46 @@ def fill_missing_meals(stage2_activities, meal_rules, days, arrival_dt, departur
                 "duration_minutes": meal["duration_minutes"],
                 "transfer_required": False, "transfer_minutes": None,
                 "meal_stop_required": False, "meal_stop_minutes": None,
+                "time_sensitive": False,
             })
 
     return augmented
+
+
+TIME_SENSITIVE_WARNING_PREFIX = "⚠️ time-sensitive item moved from original"
+
+
+def flag_time_sensitive_deviations(df):
+    """
+    For every row in a Stage 3 day's dataframe where _time_sensitive is True, checks
+    the current Time against the frozen _original_time. If they differ and the row's
+    Notes don't already carry the warning (checked by looking for
+    TIME_SENSITIVE_WARNING_PREFIX), appends a one-time note flagging the drift.
+
+    Deliberately fires on ANY deviation regardless of cause - a cascade push and a
+    direct hand-edit to the Time cell look identical here, on purpose: a flight time
+    quietly drifting is worth flagging either way.
+
+    Only ever adds the note once per row - if it's already present, nothing changes,
+    even if the row moves again afterward. The intent is a single heads-up, not a
+    running log of every subsequent change; a person who edits past the warning once
+    is assumed to be doing so deliberately.
+
+    Expects and returns a pandas DataFrame with Time/Notes/_time_sensitive/_original_time
+    columns - kept free of a hard pandas import at module load so this file's core logic
+    stays testable without pandas installed; only this one function touches it.
+    """
+    df = df.copy()
+    for idx in df.index:
+        if not df.loc[idx, "_time_sensitive"]:
+            continue
+        original = df.loc[idx, "_original_time"]
+        current = df.loc[idx, "Time"]
+        if not original or current == original:
+            continue
+        notes = df.loc[idx, "Notes"] or ""
+        if TIME_SENSITIVE_WARNING_PREFIX in notes:
+            continue
+        warning = f"{TIME_SENSITIVE_WARNING_PREFIX} {original}"
+        df.loc[idx, "Notes"] = f"{notes}; {warning}" if notes else warning
+    return df
