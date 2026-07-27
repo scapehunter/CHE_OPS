@@ -503,8 +503,12 @@ if "stage1_grid" in st.session_state:
                 old_t = _parse_time_safe(current_df.loc[i, "Time"])
                 new_t = _parse_time_safe(edited_df.loc[i, "Time"])
                 if old_t is not None and new_t is not None and new_t != old_t:
-                    shift_candidate = {"row_index": i, "delta": new_t - old_t,
-                                        "activity": edited_df.loc[i, "Activity"]}
+                    shift_candidate = {
+                        "edited_row_index": i,
+                        "edited_group": edited_df.loc[i, "_group"],
+                        "group_delta": new_t - old_t,
+                        "activity": edited_df.loc[i, "Activity"],
+                    }
                     break
 
             # Catches any direct hand-edit to a time-sensitive row's Time cell, in
@@ -518,10 +522,10 @@ if "stage1_grid" in st.session_state:
 
             pending = st.session_state.get(pending_key)
             if pending:
-                sign = "+" if pending["delta"] > 0 else ""
+                sign = "+" if pending["group_delta"] > 0 else ""
                 st.info(
-                    f"Time for **{pending['activity']}** changed by {sign}{pending['delta']} min. "
-                    f"Apply the same shift to every later row on {date_label}?"
+                    f"Time for **{pending['activity']}** changed by {sign}{pending['group_delta']} min. "
+                    f"Apply this shift (and check for any resulting conflicts) on {date_label}?"
                 )
 
             col_apply, col_dismiss = st.columns([1, 1])
@@ -529,50 +533,57 @@ if "stage1_grid" in st.session_state:
                 if st.button("⏩ Time check and Adjust", key=f"apply_{date_iso}"):
                     if pending:
                         df3 = st.session_state["stage3_dfs"][date_iso].copy()
-                        if "group_shifts" in pending:
-                            # From an insert: each disrupted group shifts by its own
-                            # computed amount (from compute_cascade_shifts), preserving
-                            # that group's internal structure exactly.
-                            group_shifts = pending["group_shifts"]
-                            for j in df3.index:
-                                gid = df3.loc[j, "_group"]
-                                if gid not in group_shifts:
-                                    continue
-                                t = _parse_time_safe(df3.loc[j, "Time"])
-                                if t is None:
-                                    continue
-                                shifted = max(0, min(23 * 60 + 59, t + group_shifts[gid]))
-                                df3.loc[j, "Time"] = f"{shifted // 60:02d}:{shifted % 60:02d}"
-                        elif "threshold_minutes" in pending:
-                            # From an older-style insert detection: shift every row
-                            # at/after the threshold, except the newly inserted rows.
-                            delta = pending["delta"]
-                            threshold = pending["threshold_minutes"]
-                            exclude_keys = {tuple(k) for k in pending.get("exclude_keys", [])}
-                            for j in df3.index:
-                                t = _parse_time_safe(df3.loc[j, "Time"])
-                                if t is None or t < threshold:
-                                    continue
-                                if (df3.loc[j, "Time"], df3.loc[j, "Activity"]) in exclude_keys:
-                                    continue
-                                shifted = max(0, min(23 * 60 + 59, t + delta))
-                                df3.loc[j, "Time"] = f"{shifted // 60:02d}:{shifted % 60:02d}"
-                        else:
-                            # From an edit: shift every row positioned after the edited one.
-                            delta = pending["delta"]
-                            row_idx = pending["row_index"]
-                            for j in df3.index:
-                                if j <= row_idx:
-                                    continue
-                                t = _parse_time_safe(df3.loc[j, "Time"])
-                                if t is None:
-                                    continue
-                                shifted = max(0, min(23 * 60 + 59, t + delta))
-                                df3.loc[j, "Time"] = f"{shifted // 60:02d}:{shifted % 60:02d}"
+                        edited_group = pending["edited_group"]
+                        edited_row_index = pending["edited_row_index"]
+                        group_delta = pending["group_delta"]
+
+                        # Step 1: rigidly translate every OTHER row in the edited group by
+                        # the same delta - the edited row itself already holds the value
+                        # the person typed and is skipped here, or it would get shifted a
+                        # second time on top of their edit. This is what actually fixes the
+                        # original bug: an edit to just one row (e.g. "X ends") no longer
+                        # leaves the rest of that same activity (e.g. "X starts") behind,
+                        # internally inconsistent - the whole group moves together.
+                        for row_idx in df3.index:
+                            if row_idx == edited_row_index:
+                                continue
+                            if df3.loc[row_idx, "_group"] == edited_group:
+                                t = _parse_time_safe(df3.loc[row_idx, "Time"])
+                                if t is not None:
+                                    shifted = max(0, min(23 * 60 + 59, t + group_delta))
+                                    df3.loc[row_idx, "Time"] = f"{shifted // 60:02d}:{shifted % 60:02d}"
+
+                        # Step 2: now check the edited group's NEW span against every
+                        # OTHER group, using the exact same two-phase cascade algorithm
+                        # an insert uses - a translated edit and a fresh insertion should
+                        # be resolved identically once the group is in its new position.
+                        all_groups = {}
+                        for gid, group_df in df3.groupby("_group"):
+                            times = [_parse_time_safe(t) for t in group_df["Time"]]
+                            times = [t for t in times if t is not None]
+                            if times:
+                                all_groups[gid] = {
+                                    "start": min(times), "end": max(times),
+                                    "order": group_df["_order"].iloc[0],
+                                }
+
+                        if edited_group in all_groups:
+                            edited_span = all_groups.pop(edited_group)
+                            group_shifts = compute_cascade_shifts(
+                                all_groups, edited_span["start"], edited_span["end"],
+                                buffer_minutes=rules_data.get("cascade_buffer_minutes", 5),
+                            )
+                            for row_idx in df3.index:
+                                gid = df3.loc[row_idx, "_group"]
+                                if gid in group_shifts:
+                                    t = _parse_time_safe(df3.loc[row_idx, "Time"])
+                                    if t is not None:
+                                        shifted = max(0, min(23 * 60 + 59, t + group_shifts[gid]))
+                                        df3.loc[row_idx, "Time"] = f"{shifted // 60:02d}:{shifted % 60:02d}"
+
                         # Re-sort so display order stays chronologically correct - a shift
                         # can otherwise leave rows visually out of order even though every
-                        # individual time is right (e.g. a shifted row now sitting later
-                        # than a row that was originally after it but wasn't shifted).
+                        # individual time is right.
                         df3["_sort_key"] = df3["Time"].apply(_parse_time_safe)
                         df3["_sort_key"] = df3["_sort_key"].fillna(24 * 60)
                         df3 = df3.sort_values("_sort_key", kind="stable").drop(columns="_sort_key").reset_index(drop=True)
