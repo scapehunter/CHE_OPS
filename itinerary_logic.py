@@ -577,18 +577,19 @@ TIME_SENSITIVE_WARNING_PREFIX = "⚠️ time-sensitive item moved from original"
 def flag_time_sensitive_deviations(df):
     """
     For every row in a Stage 3 day's dataframe where _time_sensitive is True, checks
-    the current Time against the frozen _original_time. If they differ and the row's
-    Notes don't already carry the warning (checked by looking for
-    TIME_SENSITIVE_WARNING_PREFIX), appends a one-time note flagging the drift.
+    the current Time against the frozen _original_time.
+
+    - If they differ and the row's Notes don't already carry the warning for this
+      exact original time, appends a one-time note flagging the drift.
+    - If they now MATCH (a clean revert back to the original time), removes the
+      warning if present, leaving any other text in that Notes cell untouched. A
+      later, separate drift after a clean revert is treated as a new event and gets
+      its own fresh warning - reverting genuinely resolves the situation, it doesn't
+      just suppress the message for that row forever.
 
     Deliberately fires on ANY deviation regardless of cause - a cascade push and a
     direct hand-edit to the Time cell look identical here, on purpose: a flight time
     quietly drifting is worth flagging either way.
-
-    Only ever adds the note once per row - if it's already present, nothing changes,
-    even if the row moves again afterward. The intent is a single heads-up, not a
-    running log of every subsequent change; a person who edits past the warning once
-    is assumed to be doing so deliberately.
 
     Expects and returns a pandas DataFrame with Time/Notes/_time_sensitive/_original_time
     columns - kept free of a hard pandas import at module load so this file's core logic
@@ -599,13 +600,23 @@ def flag_time_sensitive_deviations(df):
         if not df.loc[idx, "_time_sensitive"]:
             continue
         original = df.loc[idx, "_original_time"]
+        if not original:
+            continue
         current = df.loc[idx, "Time"]
-        if not original or current == original:
-            continue
         notes = df.loc[idx, "Notes"] or ""
-        if TIME_SENSITIVE_WARNING_PREFIX in notes:
-            continue
         warning = f"{TIME_SENSITIVE_WARNING_PREFIX} {original}"
+
+        if current == original:
+            if warning in notes:
+                # Surgical removal - strips exactly the warning (and its leading
+                # "; " separator if it was appended after other text), leaving
+                # anything else the person wrote in that cell intact.
+                new_notes = notes.replace(f"; {warning}", "").replace(warning, "")
+                df.loc[idx, "Notes"] = new_notes
+            continue
+
+        if warning in notes:
+            continue  # already flagged for this exact original - don't duplicate
         df.loc[idx, "Notes"] = f"{notes}; {warning}" if notes else warning
     return df
 
