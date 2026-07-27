@@ -279,10 +279,10 @@ if "stage1_grid" in st.session_state:
             all_groups = [r["_group"] for r in rows] or [-1]
             st.session_state["stage3_order_counter"] = max(all_orders) + 1
             st.session_state["stage3_group_counter"] = max(all_groups) + 1
-            # Clear any per-day widget/dialog/pending-shift state left over from a
-            # previous generation.
+            # Clear any per-day widget/pending-shift state left over from a previous
+            # generation.
             for k in list(st.session_state.keys()):
-                if k.startswith(("stage3_editor_", "pending_shift_", "show_insert_dialog_")):
+                if k.startswith(("stage3_editor_", "pending_shift_")):
                     del st.session_state[k]
 
     if "stage3_dfs" in st.session_state:
@@ -312,18 +312,12 @@ if "stage1_grid" in st.session_state:
             st.markdown(f"#### {d['label']}")
 
             editor_key = f"stage3_editor_{date_iso}"
-            insert_flag_key = f"show_insert_dialog_{date_iso}"
             pending_key = f"pending_shift_{date_iso}"
-
-            col_insert, col_download = st.columns([1, 3])
-            with col_insert:
-                if st.button("➕ Insert Row", key=f"insert_btn_{date_iso}"):
-                    st.session_state[insert_flag_key] = True
 
             current_df = st.session_state["stage3_dfs"][date_iso]
 
             @st.dialog(f"Insert Row — {date_label}")
-            def insert_row_dialog(date_iso=date_iso, day_date=d["date"], editor_key=editor_key, insert_flag_key=insert_flag_key):
+            def insert_row_dialog(date_iso=date_iso, day_date=d["date"], editor_key=editor_key):
                 kind = st.radio("Type", ["Activity", "Meal"], horizontal=True)
                 if kind == "Meal":
                     name = st.selectbox("Meal", meal_names)
@@ -353,7 +347,14 @@ if "stage1_grid" in st.session_state:
                                 help="Extends the whole transfer (both ways) by this much.",
                             )
 
-                if st.button("Insert"):
+                col_insert_btn, col_cancel_btn = st.columns([1, 1])
+                submitted = col_insert_btn.button("Insert")
+                cancelled = col_cancel_btn.button("Cancel")
+
+                if cancelled:
+                    st.rerun()
+
+                if submitted:
                     parsed_time = None
                     if anchor_time_str:
                         try:
@@ -436,11 +437,12 @@ if "stage1_grid" in st.session_state:
 
                         st.session_state["stage3_dfs"][date_iso] = combined
                         st.session_state.pop(editor_key, None)
-                        st.session_state[insert_flag_key] = False
                         st.rerun()
 
-            if st.session_state.get(insert_flag_key):
-                insert_row_dialog()
+            col_insert, col_download = st.columns([1, 3])
+            with col_insert:
+                if st.button("➕ Insert Row", key=f"insert_btn_{date_iso}"):
+                    insert_row_dialog()
 
             edited_df = st.data_editor(
                 current_df,
