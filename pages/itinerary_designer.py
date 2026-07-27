@@ -599,6 +599,19 @@ if "stage1_grid" in st.session_state:
 
             st.divider()
 
+        if st.button("🔄 Recheck time-sensitive flags (all days)"):
+            for date_iso in st.session_state["stage3_dfs"]:
+                st.session_state["stage3_dfs"][date_iso] = flag_time_sensitive_deviations(
+                    st.session_state["stage3_dfs"][date_iso]
+                )
+            st.rerun()
+        st.caption(
+            "Re-checks every time-sensitive item across the whole plan against its original "
+            "time - adds a flag anywhere it's now missing, and clears one anywhere the time "
+            "has been reverted back to the original. Flags already update automatically on "
+            "every edit/insert; this is a manual catch-all in case anything was missed."
+        )
+
         combined_parts = []
         for d in grid["days"]:
             date_iso = d["date"].isoformat()
