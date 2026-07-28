@@ -16,6 +16,12 @@ time_slots = rules_data["time_slots"]
 programs = rules_data.get("programs", [])
 program_names = [p["name"] for p in programs]
 
+
+def _parse_hhmm_str(s):
+    h, m = map(int, s.split(":"))
+    return h * 60 + m
+
+
 plan_name = st.text_input("Plan Name")
 
 program_location = st.selectbox(
@@ -182,6 +188,17 @@ if "stage1_grid" in st.session_state:
                  "Stage 3 Notes column.",
         )
 
+        fixed_time = None
+        slot_range = next((s for s in time_slots if s["name"] == slot_name), None)
+        if time_sensitive:
+            range_text = f"{slot_range['start']}–{slot_range['end']}" if slot_range else "this slot's range"
+            fixed_time = st.time_input(
+                f"Time * (must fall within {slot_name}, {range_text})",
+                value=time(*map(int, slot_range["start"].split(":"))) if slot_range else time(9, 0),
+                help=f"This item is marked time-sensitive, so it needs an exact time - must be "
+                     f"within the {slot_name} slot's range ({range_text}).",
+            )
+
         if st.button("Save"):
             if not name:
                 st.warning(f"{'Activity Name' if kind == 'Activity' else 'Meal'} is required.")
@@ -189,12 +206,19 @@ if "stage1_grid" in st.session_state:
                 st.warning("Enter a transfer time, or uncheck 'Transfer required'.")
             elif meal_stop_required and not meal_stop_minutes:
                 st.warning("Enter a meal stop duration, or uncheck 'Meal stop needed'.")
+            elif time_sensitive and slot_range and not (
+                _parse_hhmm_str(slot_range["start"]) <= fixed_time.hour * 60 + fixed_time.minute
+                < (24 * 60 if slot_range["end"] == "24:00" else _parse_hhmm_str(slot_range["end"]))
+            ):
+                st.warning(f"Time must be within the {slot_name} slot's range ({slot_range['start']}–{slot_range['end']}).")
             else:
                 entry_text = f"[{kind}] {name} ({duration_minutes} min)"
                 if transfer_required:
                     entry_text += f" | Transfer: {transfer_minutes} min"
                     if meal_stop_required:
                         entry_text += f" (+{meal_stop_minutes} min meal stop)"
+                if time_sensitive:
+                    entry_text += f" | Fixed at {fixed_time.strftime('%H:%M')}"
                 for d in st.session_state["stage1_grid"]["days"]:
                     if d["date"] == day_date:
                         existing = d[slot_name]
@@ -207,6 +231,7 @@ if "stage1_grid" in st.session_state:
                     "transfer_required": transfer_required, "transfer_minutes": transfer_minutes,
                     "meal_stop_required": meal_stop_required, "meal_stop_minutes": meal_stop_minutes,
                     "time_sensitive": time_sensitive,
+                    "fixed_time": fixed_time,
                 })
                 st.rerun()
 
@@ -639,4 +664,3 @@ if "stage1_grid" in st.session_state:
                 "📥 Download Combined Timewise Itinerary (all days)",
                 combined_csv, "timewise_itinerary_combined.csv", "text/csv",
             )
-            

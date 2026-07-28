@@ -379,7 +379,13 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
       {"date": date, "slot": slot_name, "order": int (insertion order, for sequencing
        multiple items in the same slot), "kind": "Activity" or "Meal", "name": str,
        "duration_minutes": int, "transfer_required": bool, "transfer_minutes": int or None,
-       "meal_stop_required": bool, "meal_stop_minutes": int or None}
+       "meal_stop_required": bool, "meal_stop_minutes": int or None,
+       "time_sensitive": bool, "fixed_time": datetime.time or None}
+
+    "fixed_time" (only meaningful when time_sensitive is True) overrides the normal
+    sequential slot anchor - the item is placed at that exact time rather than
+    wherever the running clock for its slot happens to be. Items after it in the same
+    slot still chain normally from wherever this one ends.
 
     default_slot_starts: dict of slot_name -> "HH:MM", the assumed start-of-day-part time
       used to anchor a slot's activities when nothing else establishes a start time
@@ -423,8 +429,16 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
         running_dt = datetime.combine(day_date, datetime.min.time()) + timedelta(minutes=_parse_hhmm(start_str))
 
         for a in activities_sorted:
+            anchor_dt = running_dt
+            if a.get("time_sensitive") and a.get("fixed_time"):
+                # An explicit time entered in Stage 2 for a time-sensitive item
+                # overrides the sequential slot anchor - it's meant to happen at that
+                # exact time, not wherever the running clock for this slot happens to
+                # be. Later items in the same slot still chain normally from wherever
+                # this one ends, via the running_dt reassignment below.
+                anchor_dt = datetime.combine(day_date, a["fixed_time"])
             new_rows, running_dt = expand_activity_or_meal(
-                running_dt, day_date, a["kind"], a["name"], a["duration_minutes"],
+                anchor_dt, day_date, a["kind"], a["name"], a["duration_minutes"],
                 a["transfer_required"], a["transfer_minutes"],
                 a.get("meal_stop_required", False), a.get("meal_stop_minutes"),
                 meal_rules, accommodation_details,
@@ -627,4 +641,3 @@ def flag_time_sensitive_deviations(df):
             continue  # already flagged for this exact original - don't duplicate
         df.loc[idx, "Notes"] = f"{notes}; {warning}" if notes else warning
     return df
-    
