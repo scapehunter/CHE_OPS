@@ -1,15 +1,99 @@
 import csv
 import io
+from datetime import date
 
 import pandas as pd
 import streamlit as st
 
 st.title("🧳 Trip Data Extractor")
 st.write(
-    "Upload a trip data file (CSV or Excel) to see it laid out clearly. "
-    "This is the first step of the tool - showing the data meaningfully, before any "
-    "extraction logic is added on top."
+    "Upload a trip data file (CSV or Excel) to see it laid out clearly, check it against "
+    "the expected registration headers, and get a quick breakdown of the participants."
 )
+
+EXPECTED_HEADERS = {
+    "General": [
+        "Sr No",
+        "Title  (Mr/ Ms/ Mrs)",
+        "Student Name",
+        "Gender",
+        "Date of Birth(DD/MM/YYYY)",
+        "Nationality",
+        "ID No",
+        "ID Type(Aadhar / Passport)",
+        "Meal Preference  (Veg/Non Veg/Jain)",
+    ],
+    "Medical Details": [
+        "Food allergies",
+        "Other allergies",
+        "Specific Medical condition and/ or Pre Existing Disease  (if any)",
+        "Present Medication (if any)",
+    ],
+    "Insurance Details": [
+        "Nominee Name ",
+        "Nominee Relation",
+        "Nominee Date of Birth",
+    ],
+}
+# This is the ONE fixed expected header set this tool checks against - not something
+# a person configures per upload. If the expected headers ever change, this is the
+# single place to update them.
+
+AGE_BRACKETS = [
+    (0, 9, "Under 10"),
+    (10, 12, "10-12"),
+    (13, 15, "13-15"),
+    (16, 18, "16-18"),
+    (19, None, "19+"),
+]
+# Not something the person specified explicitly - a reasonable default grouping for a
+# school-trip context (younger students through older teens, plus adults/chaperones
+# in the open-ended 19+ bucket). Easy to adjust here if a different grouping is wanted.
+
+
+def normalize_header(s):
+    """Collapses any run of whitespace to a single space and strips ends, so an
+    incidental double-space or trailing space in the file doesn't register as a
+    missing header when the wording otherwise matches exactly."""
+    return " ".join(str(s).split())
+
+
+def find_matching_column(expected_header, actual_columns):
+    """Returns the actual column name in the file that matches expected_header after
+    whitespace normalization, or None if nothing matches."""
+    target = normalize_header(expected_header)
+    for col in actual_columns:
+        if normalize_header(col) == target:
+            return col
+    return None
+
+
+def compute_ages(series):
+    """Returns (ages, valid_count, invalid_count). Handles both a column pandas has
+    already auto-parsed as real dates (typical when reading Excel, since Excel stores
+    dates as actual date values, not text) and a column of literal "DD/MM/YYYY"
+    strings (typical when reading CSV). Anything that doesn't parse as a valid date
+    in the required format is treated as invalid, not silently guessed at."""
+    if pd.api.types.is_datetime64_any_dtype(series):
+        parsed = series
+    else:
+        parsed = pd.to_datetime(series, format="%d/%m/%Y", errors="coerce")
+    today = pd.Timestamp(date.today())
+    ages = []
+    for dob in parsed:
+        if pd.isna(dob):
+            ages.append(None)
+        else:
+            age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+            ages.append(age)
+    return ages, int(parsed.notna().sum()), int(parsed.isna().sum())
+
+
+def bracket_for_age(age):
+    for lo, hi, label in AGE_BRACKETS:
+        if age >= lo and (hi is None or age <= hi):
+            return label
+    return "Unknown"
 
 
 def read_dataset_raw(uploaded_file):
@@ -80,17 +164,63 @@ st.subheader("Data")
 st.caption(f"{len(df)} rows, {len(df.columns)} columns")
 st.dataframe(df, use_container_width=True)
 
-st.subheader("Column overview")
-overview_rows = []
-for col in df.columns:
-    non_null = df[col].notna().sum()
-    overview_rows.append({
-        "Column": col,
-        "Type": str(df[col].dtype),
-        "Non-empty values": f"{non_null} / {len(df)}",
-        "Unique values": df[col].nunique(),
+st.divider()
+st.subheader("File Analysis")
+
+# --- Header check ---
+st.markdown("**Header check**")
+column_lookup = {}  # expected header -> actual matching column name in df, or None
+for category, headers in EXPECTED_HEADERS.items():
+    st.caption(category)
+    check_rows = []
+    for header in headers:
+        match = find_matching_column(header, df.columns)
+        column_lookup[header] = match
+        check_rows.append({"Expected header": header, "Present": "✅" if match else "❌ Missing"})
+    st.dataframe(pd.DataFrame(check_rows), use_container_width=True, hide_index=True)
+
+# --- Total records ---
+st.markdown(f"**Total number of records:** {len(df)}")
+
+# --- Gender breakdown ---
+gender_col = column_lookup.get("Gender")
+if gender_col:
+    st.markdown("**Gender breakdown**")
+    gender_counts = df[gender_col].fillna("(blank)").astype(str).str.strip().value_counts()
+    st.dataframe(
+        pd.DataFrame({"Gender": gender_counts.index, "Count": gender_counts.values}),
+        use_container_width=True, hide_index=True,
+    )
+
+# --- Age groups from DOB ---
+dob_col = column_lookup.get("Date of Birth(DD/MM/YYYY)")
+if dob_col:
+    st.markdown("**Age groups (as of today)**")
+    ages, valid_count, invalid_count = compute_ages(df[dob_col])
+    if invalid_count:
+        st.caption(f"{invalid_count} of {len(df)} Date of Birth values weren't in DD/MM/YYYY format and were excluded.")
+    bracket_counts = {}
+    for age in ages:
+        if age is None:
+            continue
+        label = bracket_for_age(age)
+        bracket_counts[label] = bracket_counts.get(label, 0) + 1
+    bracket_order = [b[2] for b in AGE_BRACKETS]
+    age_table = pd.DataFrame({
+        "Age Group": bracket_order,
+        "Count": [bracket_counts.get(label, 0) for label in bracket_order],
     })
-st.dataframe(pd.DataFrame(overview_rows), use_container_width=True, hide_index=True)
+    st.dataframe(age_table, use_container_width=True, hide_index=True)
+
+# --- Meal preference breakdown ---
+meal_col = column_lookup.get("Meal Preference  (Veg/Non Veg/Jain)")
+if meal_col:
+    st.markdown("**Meal preference breakdown**")
+    meal_counts = df[meal_col].fillna("(blank)").astype(str).str.strip().value_counts()
+    st.dataframe(
+        pd.DataFrame({"Meal Preference": meal_counts.index, "Count": meal_counts.values}),
+        use_container_width=True, hide_index=True,
+    )
 
 csv_bytes = df.to_csv(index=False).encode("utf-8")
 st.download_button("Download as CSV", csv_bytes, "trip_data.csv", "text/csv")
