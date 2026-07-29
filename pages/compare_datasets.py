@@ -44,15 +44,17 @@ def read_dataset(uploaded_file, header_row):
 
 col_a, col_b = st.columns(2)
 with col_a:
-    st.subheader("Dataset A")
+    st.subheader(st.session_state.get("file_a").name if st.session_state.get("file_a") else "Dataset A")
     file_a = st.file_uploader("Upload file A", type=["csv", "xlsx", "xls"], key="file_a")
 with col_b:
-    st.subheader("Dataset B")
+    st.subheader(st.session_state.get("file_b").name if st.session_state.get("file_b") else "Dataset B")
     file_b = st.file_uploader("Upload file B", type=["csv", "xlsx", "xls"], key="file_b")
 
 if not (file_a and file_b):
     st.info("Upload both datasets to continue.")
     st.stop()
+
+label_a, label_b = file_a.name, file_b.name
 
 try:
     raw_a = read_dataset_raw(file_a)
@@ -61,18 +63,24 @@ except Exception as e:
     st.error(f"Couldn't read one of the files: {e}")
     st.stop()
 
-st.caption("Preview shows the raw rows, unlabeled - pick which row number is the real header for each file.")
+st.caption("Enter which row number is the real header for each file, then check it against the raw preview below.")
 col_header_a, col_header_b = st.columns(2)
 with col_header_a:
-    st.dataframe(raw_a.head(10), use_container_width=True)
     header_row_a = st.number_input(
-        "Header row for Dataset A", min_value=0, max_value=max(len(raw_a) - 1, 0), value=0, key="header_a",
+        f"Header row for {label_a} *", min_value=0, max_value=max(len(raw_a) - 1, 0),
+        value=None, placeholder="Enter a row number", key="header_a_row",
     )
+    st.dataframe(raw_a.head(10), use_container_width=True)
 with col_header_b:
-    st.dataframe(raw_b.head(10), use_container_width=True)
     header_row_b = st.number_input(
-        "Header row for Dataset B", min_value=0, max_value=max(len(raw_b) - 1, 0), value=0, key="header_b",
+        f"Header row for {label_b} *", min_value=0, max_value=max(len(raw_b) - 1, 0),
+        value=None, placeholder="Enter a row number", key="header_b_row",
     )
+    st.dataframe(raw_b.head(10), use_container_width=True)
+
+if header_row_a is None or header_row_b is None:
+    st.info("Enter a header row number for both files (using the preview below each box) to continue.")
+    st.stop()
 
 try:
     df_a = read_dataset(file_a, header_row_a)
@@ -81,7 +89,7 @@ except Exception as e:
     st.error(f"Couldn't re-read one of the files with that header row: {e}")
     st.stop()
 
-st.caption("Parsed using the header row you picked above:")
+st.caption("Parsed using the header row you entered above:")
 with col_a:
     st.caption(f"{len(df_a)} rows, {len(df_a.columns)} columns")
     st.dataframe(df_a.head(), use_container_width=True)
@@ -96,12 +104,12 @@ key_col1, key_col2, key_col3 = st.columns(3)
 with key_col1:
     cols_a = list(df_a.columns)
     default_key_a = 0
-    key_a = st.selectbox("Key column in Dataset A", cols_a, index=default_key_a)
+    key_a = st.selectbox(f"Key column in {label_a}", cols_a, index=default_key_a)
 with key_col2:
     cols_b = list(df_b.columns)
     # default to the same column name in B if it exists, else the first column
     default_key_b = cols_b.index(key_a) if key_a in cols_b else 0
-    key_b = st.selectbox("Key column in Dataset B", cols_b, index=default_key_b)
+    key_b = st.selectbox(f"Key column in {label_b}", cols_b, index=default_key_b)
 with key_col3:
     how = st.selectbox(
         "Rows to include",
@@ -120,10 +128,10 @@ st.subheader("Columns to compare")
 pick_col1, pick_col2 = st.columns(2)
 with pick_col1:
     other_cols_a = [c for c in cols_a if c != key_a]
-    selected_a = st.multiselect("From Dataset A", other_cols_a, default=other_cols_a)
+    selected_a = st.multiselect(f"From {label_a}", other_cols_a, default=other_cols_a)
 with pick_col2:
     other_cols_b = [c for c in cols_b if c != key_b]
-    selected_b = st.multiselect("From Dataset B", other_cols_b, default=other_cols_b)
+    selected_b = st.multiselect(f"From {label_b}", other_cols_b, default=other_cols_b)
 
 # Normalize the key values so matching isn't broken by whitespace or case differences
 # (a common source of false "only in A"/"only in B" rows when comparing rosters).
@@ -184,7 +192,7 @@ if (normalize_keys or ignore_chars_enabled) and "_match_key" in merged.columns:
     merged = merged.drop(columns=["_match_key"])
 
 merged["_merge"] = merged["_merge"].map({
-    "left_only": "Only in Dataset A", "right_only": "Only in Dataset B", "both": "In Both",
+    "left_only": f"Only in {label_a}", "right_only": f"Only in {label_b}", "both": "In Both",
 })
 merged = merged.rename(columns={"_merge": "Match Status"})
 
@@ -227,5 +235,5 @@ def highlight_row(row):
 styled = merged.style.apply(highlight_row, axis=1)
 st.dataframe(styled, use_container_width=True)
 
-csv = merged.to_csv(index=False).encode("utf-8")
-st.download_button("Download comparison as CSV", csv, "comparison.csv", "text/csv")
+csv_bytes = merged.to_csv(index=False).encode("utf-8")
+st.download_button("Download comparison as CSV", csv_bytes, "comparison.csv", "text/csv")
