@@ -262,14 +262,14 @@ else:
     st.dataframe(filtered_df[["Student Name", "Other allergies"]])
 
 
-st.caption("Medical Condition")
+st.caption("Specific Medical condition")
 
 # Drops NaN values, strips hidden spaces, and removes completely blank text rows
-filtered_df = df[df["Other allergies"].notna() & (df["Other allergies"].astype(str).str.strip() != "") & (df["Other allergies"].astype(str).str.lower().str.strip() != "na") & (df["Other allergies"].astype(str).str.lower().str.strip() != "no")]
+filtered_df = df[df["Specific Medical condition"].notna() & (df["Specific Medical condition"].astype(str).str.strip() != "") & (df["Specific Medical condition"].astype(str).str.lower().str.strip() != "na") & (df["Other allergies"].astype(str).str.lower().str.strip() != "no")]
 if filtered_df.empty:
-    st.info("🎉 No Other allergies reported for these students.")
+    st.info("🎉 No Specific Medical condition reported for these students.")
 else:
-    st.dataframe(filtered_df[["Student Name", "Other allergies"]])
+    st.dataframe(filtered_df[["Student Name", "Specific Medical condition"]])
 
 
 
