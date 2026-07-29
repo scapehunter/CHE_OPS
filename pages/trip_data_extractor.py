@@ -165,62 +165,78 @@ st.caption(f"{len(df)} rows, {len(df.columns)} columns")
 st.dataframe(df, use_container_width=True)
 
 st.divider()
-st.subheader("File Analysis")
+st.subheader("Header Check")
 
-# --- Header check ---
-st.markdown("**Header check**")
 column_lookup = {}  # expected header -> actual matching column name in df, or None
+for header in [h for headers in EXPECTED_HEADERS.values() for h in headers]:
+    column_lookup[header] = find_matching_column(header, df.columns)
+
+HEADER_GRID_COLUMNS = {"General": 3, "Medical Details": 4, "Insurance Details": 3}
+# Column counts requested per category, so each grid reads as a compact block rather
+# than one header per row - General's 9 headers form a 3x3 grid, Medical's 4 headers
+# fit a single row of 4, Insurance's 3 headers fit a single row of 3.
+
 for category, headers in EXPECTED_HEADERS.items():
     st.caption(category)
-    check_rows = []
-    for header in headers:
-        match = find_matching_column(header, df.columns)
-        column_lookup[header] = match
-        check_rows.append({"Expected header": header, "Present": "✅" if match else "❌ Missing"})
-    st.dataframe(pd.DataFrame(check_rows), use_container_width=True, hide_index=True)
+    num_cols = HEADER_GRID_COLUMNS.get(category, 3)
+    grid_cols = st.columns(num_cols)
+    for i, header in enumerate(headers):
+        status = "✅" if column_lookup[header] else "❌"
+        with grid_cols[i % num_cols]:
+            st.markdown(f"{status} {header}")
 
-# --- Total records ---
+st.divider()
+st.subheader("Data Analysis")
 st.markdown(f"**Total number of records:** {len(df)}")
 
-# --- Gender breakdown ---
 gender_col = column_lookup.get("Gender")
-if gender_col:
-    st.markdown("**Gender breakdown**")
-    gender_counts = df[gender_col].fillna("(blank)").astype(str).str.strip().value_counts()
-    st.dataframe(
-        pd.DataFrame({"Gender": gender_counts.index, "Count": gender_counts.values}),
-        use_container_width=True, hide_index=True,
-    )
-
-# --- Age groups from DOB ---
 dob_col = column_lookup.get("Date of Birth(DD/MM/YYYY)")
-if dob_col:
-    st.markdown("**Age groups (as of today)**")
-    ages, valid_count, invalid_count = compute_ages(df[dob_col])
-    if invalid_count:
-        st.caption(f"{invalid_count} of {len(df)} Date of Birth values weren't in DD/MM/YYYY format and were excluded.")
-    bracket_counts = {}
-    for age in ages:
-        if age is None:
-            continue
-        label = bracket_for_age(age)
-        bracket_counts[label] = bracket_counts.get(label, 0) + 1
-    bracket_order = [b[2] for b in AGE_BRACKETS]
-    age_table = pd.DataFrame({
-        "Age Group": bracket_order,
-        "Count": [bracket_counts.get(label, 0) for label in bracket_order],
-    })
-    st.dataframe(age_table, use_container_width=True, hide_index=True)
-
-# --- Meal preference breakdown ---
 meal_col = column_lookup.get("Meal Preference  (Veg/Non Veg/Jain)")
-if meal_col:
-    st.markdown("**Meal preference breakdown**")
-    meal_counts = df[meal_col].fillna("(blank)").astype(str).str.strip().value_counts()
-    st.dataframe(
-        pd.DataFrame({"Meal Preference": meal_counts.index, "Count": meal_counts.values}),
-        use_container_width=True, hide_index=True,
-    )
+
+analysis_cols = st.columns(3)
+
+with analysis_cols[0]:
+    st.caption("Gender")
+    if gender_col:
+        gender_counts = df[gender_col].fillna("(blank)").astype(str).str.strip().value_counts()
+        st.dataframe(
+            pd.DataFrame({"Gender": gender_counts.index, "Count": gender_counts.values}),
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        st.caption("Header not found")
+
+with analysis_cols[1]:
+    st.caption("Age Groups (as of today)")
+    if dob_col:
+        ages, valid_count, invalid_count = compute_ages(df[dob_col])
+        if invalid_count:
+            st.caption(f"{invalid_count}/{len(df)} DOB values not in DD/MM/YYYY - excluded")
+        bracket_counts = {}
+        for age in ages:
+            if age is None:
+                continue
+            label = bracket_for_age(age)
+            bracket_counts[label] = bracket_counts.get(label, 0) + 1
+        bracket_order = [b[2] for b in AGE_BRACKETS]
+        age_table = pd.DataFrame({
+            "Age Group": bracket_order,
+            "Count": [bracket_counts.get(label, 0) for label in bracket_order],
+        })
+        st.dataframe(age_table, use_container_width=True, hide_index=True)
+    else:
+        st.caption("Header not found")
+
+with analysis_cols[2]:
+    st.caption("Meal Preference")
+    if meal_col:
+        meal_counts = df[meal_col].fillna("(blank)").astype(str).str.strip().value_counts()
+        st.dataframe(
+            pd.DataFrame({"Meal Preference": meal_counts.index, "Count": meal_counts.values}),
+            use_container_width=True, hide_index=True,
+        )
+    else:
+        st.caption("Header not found")
 
 csv_bytes = df.to_csv(index=False).encode("utf-8")
 st.download_button("Download as CSV", csv_bytes, "trip_data.csv", "text/csv")
