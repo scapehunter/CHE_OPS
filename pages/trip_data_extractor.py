@@ -247,5 +247,5 @@ st.dataframe(
         (df["Food allergies"] != "") && (df["Food allergies"].notna()),
         ["Student Name", "Food allergies"],
     ]
-]
+)
 
