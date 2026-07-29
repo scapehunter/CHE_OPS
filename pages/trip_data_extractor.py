@@ -51,6 +51,13 @@ AGE_BRACKETS = [
 # school-trip context (younger students through older teens, plus adults/chaperones
 # in the open-ended 19+ bucket). Easy to adjust here if a different grouping is wanted.
 
+KNOWN_TYPES = ["student", "teacher", "che/trip leader/chtl"]
+# The one source of truth for recognized Type values (already normalized: lowercase,
+# whitespace-collapsed) - used both to flag anything in the data that doesn't match
+# one of these, and everywhere else Type gets matched (age group filter, gender
+# cross-tab, room allocation), so a typo'd or differently-worded Type value shows up
+# as a visible flag instead of just silently vanishing from every downstream feature.
+
 
 def normalize_header(s):
     """Collapses any run of whitespace to a single space and strips ends, so an
@@ -227,6 +234,20 @@ dob_col = column_lookup.get("Date of Birth(DD/MM/YYYY)")
 meal_col = column_lookup.get("Meal Preference  (Veg/Non Veg/Jain)")
 type_col = column_lookup.get("Type")
 
+if type_col:
+    type_norm_check = df[type_col].astype(str).str.strip().str.lower()
+    is_known = type_norm_check.isin(KNOWN_TYPES)
+    if (~is_known).any():
+        unrecognized = df.loc[~is_known, type_col].astype(str).str.strip()
+        unrecognized_counts = unrecognized.value_counts()
+        st.warning(
+            "Some rows have a Type value that doesn't match Student, Teacher, or "
+            "CHE/Trip Leader/CHTL. They're excluded from Student Age Group and Room "
+            "Allocation (both need an exact match to work), but will still appear as "
+            "their own row in the Gender breakdown below:\n\n"
+            + "\n".join(f"- \"{val}\" — {count} row(s)" for val, count in unrecognized_counts.items())
+        )
+
 analysis_cols = st.columns(3)
 
 with analysis_cols[0]:
@@ -346,6 +367,127 @@ else:
     combined_parts.append(filtered_df[["Student Name", spec_medical_cols[0]]])
 
 
+def allocate_rooms(count, max_size, min_size):
+    """
+    Returns {room_size: room_count} for splitting `count` people into rooms sized
+    between min_size and max_size (inclusive).
+
+    Fills rooms at max_size first. If the leftover remainder is too small to be a
+    valid room on its own (< min_size), borrows the people back out of the last
+    max-size room and splits that combined group into two rooms as evenly as
+    possible, keeping both within [min_size, max_size] - e.g. 10 people with
+    max=3/min=2 fills three Triples (9 people) with 1 left over; since 1 < min(2),
+    the last Triple is broken open and its 3 people + the leftover 1 = 4 people
+    split evenly into two Doubles, giving Triple x2 + Double x2 for 10 total.
+    """
+    if count <= 0 or max_size < min_size or min_size < 1:
+        return {}
+    rooms = []
+    remaining = count
+    while remaining > 0:
+        if remaining >= max_size:
+            rooms.append(max_size)
+            remaining -= max_size
+        elif remaining >= min_size:
+            rooms.append(remaining)
+            remaining = 0
+        else:
+            if rooms:
+                last = rooms.pop()
+                total = last + remaining
+                half1 = total // 2
+                half2 = total - half1
+                if half1 >= min_size and half2 <= max_size:
+                    rooms.append(half1)
+                    rooms.append(half2)
+                else:
+                    rooms.append(total)  # can't split cleanly - one oversized room
+            else:
+                rooms.append(remaining)  # single undersized room, no way around it
+            remaining = 0
+    result = {}
+    for size in rooms:
+        result[size] = result.get(size, 0) + 1
+    return result
+
+
+ROOM_SIZE_NAMES = {1: "Single", 2: "Double", 3: "Triple", 4: "Quad", 5: "Quint", 6: "Hex"}
+
+st.divider()
+st.subheader("Room Allocation")
+st.caption(
+    "Rooms are allocated gender-wise within each type - only males share a room "
+    "with each other, and only females share a room with each other, across all "
+    "three participant types."
+)
+
+room_input_cols = st.columns(3)
+room_settings = {}
+for col, participant_type in zip(room_input_cols, ["Students", "Teacher", "CHE/Trip Leader/ CHTL"]):
+    with col:
+        st.markdown(f"**{participant_type}**")
+        max_size = st.number_input(f"Max in a Room ({participant_type})", min_value=1, value=3, key=f"max_{participant_type}")
+        min_size = st.number_input(f"Min in a Room ({participant_type})", min_value=1, max_value=max_size, value=min(2, max_size), key=f"min_{participant_type}")
+        room_settings[participant_type] = (max_size, min_size)
+
+if st.button("Allocate Room"):
+    if not (gender_col and type_col):
+        st.warning("Both the Gender and Type headers are needed to allocate rooms.")
+    else:
+        gender_norm = df[gender_col].astype(str).str.strip().str.lower()
+        type_norm = df[type_col].astype(str).str.strip().str.lower()
+
+        # (row label, type-matching value, room settings key, gender to match)
+        groups = [
+            ("Boys", "student", "Students", "male"),
+            ("Girls", "student", "Students", "female"),
+            ("Male Teachers", "teacher", "Teacher", "male"),
+            ("Female Teachers", "teacher", "Teacher", "female"),
+            ("Male CHTL", "che/trip leader/chtl", "CHE/Trip Leader/ CHTL", "male"),
+            ("Female CHTL", "che/trip leader/chtl", "CHE/Trip Leader/ CHTL", "female"),
+        ]
+
+        all_sizes_used = set()
+        row_results = []
+        for label, type_match, settings_key, gender_match in groups:
+            count = int(((type_norm == type_match) & (gender_norm == gender_match)).sum())
+            max_size, min_size = room_settings[settings_key]
+            allocation = allocate_rooms(count, max_size, min_size) if count else {}
+            all_sizes_used.update(allocation.keys())
+            row_results.append({"label": label, "count": count, "allocation": allocation})
+
+        size_order = sorted(all_sizes_used)
+        size_columns = [ROOM_SIZE_NAMES.get(s, str(s)) for s in size_order]
+
+        table_rows = []
+        total_pax = 0
+        total_rooms_by_size = {s: 0 for s in size_order}
+        for r in row_results:
+            row = {"": r["label"], "Number": r["count"]}
+            room_total = 0
+            for s, col_name in zip(size_order, size_columns):
+                n_rooms = r["allocation"].get(s, 0)
+                row[col_name] = n_rooms if n_rooms else ""
+                room_total += n_rooms
+                total_rooms_by_size[s] += n_rooms
+            row["Total"] = room_total
+            table_rows.append(row)
+            total_pax += r["count"]
+
+        total_row = {"": "Total Pax", "Number": total_pax}
+        for s, col_name in zip(size_order, size_columns):
+            total_row[col_name] = total_rooms_by_size[s]
+        total_row["Total"] = sum(total_rooms_by_size.values())
+        table_rows.append(total_row)
+
+        room_table = pd.DataFrame(table_rows)
+        st.session_state["room_allocation_table"] = room_table
+
+if "room_allocation_table" in st.session_state:
+    st.dataframe(st.session_state["room_allocation_table"], use_container_width=True, hide_index=True)
+    combined_parts.append(st.session_state["room_allocation_table"])
+
+
 if combined_parts:
     combined_df = pd.concat(combined_parts, ignore_index=True)
     combined_csv = combined_df.to_csv(index=False).encode("utf-8")
@@ -353,3 +495,4 @@ if combined_parts:
         "📥 Download Analysed Data",
         combined_csv, "analysed_data.csv", "text/csv",
     )
+    
