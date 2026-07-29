@@ -1,8 +1,8 @@
 import pandas as pd
 import streamlit as st
 
-st.title("🔍 Compare Datasets/Sheets/Excel/CSV")
-st.write("Upload two datasets (CSV or Excel), match them on a common column, and see them merged side by side. Please ensure the uplaoded files have one sheet only")
+st.title("🔍 Compare Datasets")
+st.write("Upload two datasets (CSV or Excel), match them on a common column, and see them merged side by side.")
 
 
 def read_dataset(uploaded_file):
@@ -80,12 +80,47 @@ normalize_keys = st.checkbox(
     "Ignore case/whitespace differences in the key column when matching", value=True
 )
 
+col_ignore_check, col_ignore_chars = st.columns([1, 2])
+with col_ignore_check:
+    ignore_chars_enabled = st.checkbox(
+        "Also ignore specific character(s)",
+        help="Useful when the same key is formatted differently between files - e.g. "
+             "'Doe, John' in one file vs 'Doe John' in the other (a comma separator "
+             "difference). Enter every character to strip out before matching.",
+    )
+with col_ignore_chars:
+    ignore_chars = st.text_input(
+        "Character(s) to ignore", value=",", disabled=not ignore_chars_enabled,
+        label_visibility="collapsed", placeholder="e.g. , or -",
+    )
+
 a_subset = df_a[[key_a] + selected_a].copy()
 b_subset = df_b[[key_b] + selected_b].copy()
 
-if normalize_keys:
-    a_subset["_match_key"] = a_subset[key_a].astype(str).str.strip().str.upper()
-    b_subset["_match_key"] = b_subset[key_b].astype(str).str.strip().str.upper()
+if normalize_keys or ignore_chars_enabled:
+    a_match = a_subset[key_a].astype(str)
+    b_match = b_subset[key_b].astype(str)
+    if normalize_keys:
+        a_match = a_match.str.strip().str.upper()
+        b_match = b_match.str.strip().str.upper()
+    if ignore_chars_enabled and ignore_chars:
+        # Strip every character in the given string literally (not as a regex
+        # pattern), so something like "." or "*" is treated as itself, not a
+        # wildcard - avoids needing to explain regex-escaping to someone who just
+        # wants to ignore a comma or a hyphen.
+        for ch in ignore_chars:
+            a_match = a_match.str.replace(ch, "", regex=False)
+            b_match = b_match.str.replace(ch, "", regex=False)
+        if normalize_keys:
+            # A stray extra space can appear once the separator itself is removed
+            # (e.g. "Doe, John" -> "Doe John" is fine, but "Doe,John" with no
+            # space stays fine too) - re-strip only if case/whitespace normalization
+            # was already requested, so this doesn't change behavior for someone
+            # who only wants exact-character-stripping with everything else intact.
+            a_match = a_match.str.strip()
+            b_match = b_match.str.strip()
+    a_subset["_match_key"] = a_match
+    b_subset["_match_key"] = b_match
     left_on, right_on = "_match_key", "_match_key"
 else:
     left_on, right_on = key_a, key_b
@@ -94,7 +129,7 @@ merged = a_subset.merge(
     b_subset, left_on=left_on, right_on=right_on,
     how=how_map[how], suffixes=(" (A)", " (B)"), indicator=True,
 )
-if normalize_keys and "_match_key" in merged.columns:
+if (normalize_keys or ignore_chars_enabled) and "_match_key" in merged.columns:
     merged = merged.drop(columns=["_match_key"])
 
 merged["_merge"] = merged["_merge"].map({
