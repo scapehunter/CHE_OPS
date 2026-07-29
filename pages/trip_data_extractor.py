@@ -245,7 +245,7 @@ st.caption("Food Allergies")
 st.dataframe(
     df.loc[
         ((df["Food allergies"].notna())  &  df["Food allergies"].astype(str).str.strip() != ""),
-        ["Student Name", "Food allergies"],
+        ["Student Name", "Food allergies"]
     ]
 )
 
