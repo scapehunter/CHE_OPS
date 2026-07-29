@@ -242,10 +242,10 @@ csv_bytes = df.to_csv(index=False).encode("utf-8")
 st.download_button("Download as CSV", csv_bytes, "trip_data.csv", "text/csv")
 
 st.caption("Food Allergies")
-st.dataframe(
-    df[
-        ((df["Food allergies"].notna())  &  df["Food allergies"].astype(str).str.strip() != ""),
-        ["Student Name", "Food allergies"]
-    ]
-)
+
+# Drops NaN values, strips hidden spaces, and removes completely blank text rows
+filtered_df = df[df["Food allergies"].notna() & (df["Food allergies"].astype(str).str.strip() != "")]
+
+st.dataframe(filtered_df[["Student Name", "Food allergies"]])
+
 
