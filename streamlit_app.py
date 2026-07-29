@@ -55,7 +55,7 @@ home = st.Page("pages/home.py", title="Home", icon="🏠", default=True)
 ticket_extractor = st.Page("pages/ticket_extractor.py", title="Ticket Extractor", icon="🎫")
 compare_datasets = st.Page("pages/compare_datasets.py", title="Compare Datasets", icon="🔍")
 itinerary_designer = st.Page("pages/itinerary_designer.py", title="Itinerary Designer", icon="🗺️")
-trip_data_extractor = st.Page("pages/trip_data_extractor.py", title="Trip Data Extractor", icon="🧳")
+trip_data_extractor = st.Page("pages/trip_data_extractor.py", title="Participant Data Extractor", icon="🧳")
 
 # Add future tools to this list as you build them, e.g.:
 # another_tool = st.Page("pages/another_tool.py", title="Another Tool", icon="🛠️")
@@ -63,4 +63,3 @@ trip_data_extractor = st.Page("pages/trip_data_extractor.py", title="Trip Data E
 
 pg = st.navigation([home, ticket_extractor, compare_datasets, itinerary_designer, trip_data_extractor])
 pg.run()
-

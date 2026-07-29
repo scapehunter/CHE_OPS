@@ -25,7 +25,7 @@ st.page_link(
 )
 st.page_link(
     "pages/trip_data_extractor.py",
-    label="🧳 Trip Data Extractor",
+    label="🧳 Participant Data Extractor",
     help="Upload a trip data file (CSV/Excel) to view it clearly",
 )
 

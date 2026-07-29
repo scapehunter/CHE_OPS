@@ -5,7 +5,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-st.title("🧳 Trip Data Extractor")
+st.title("🧳 Participant Data Extractor")
 st.write(
     "Upload a trip data file (CSV or Excel) to see it laid out clearly, check it against "
     "the expected registration headers, and get a quick breakdown of the participants."
@@ -51,12 +51,29 @@ AGE_BRACKETS = [
 # school-trip context (younger students through older teens, plus adults/chaperones
 # in the open-ended 19+ bucket). Easy to adjust here if a different grouping is wanted.
 
-KNOWN_TYPES = ["student", "teacher", "che/trip leader/chtl"]
-# The one source of truth for recognized Type values (already normalized: lowercase,
-# whitespace-collapsed) - used both to flag anything in the data that doesn't match
-# one of these, and everywhere else Type gets matched (age group filter, gender
-# cross-tab, room allocation), so a typo'd or differently-worded Type value shows up
-# as a visible flag instead of just silently vanishing from every downstream feature.
+TYPE_ALIASES = {
+    "Student": ["student"],
+    "Teacher": ["teacher"],
+    "CHE/Trip Leader/CHTL": ["che", "trip leader", "chtl", "che/trip leader/chtl"],
+}
+# CHE, Trip Leader, and CHTL are different names for the SAME role, not three
+# distinct types - any of these (or the combined label itself) canonicalizes to
+# "CHE/Trip Leader/CHTL". This is the one source of truth for recognized Type
+# values - used both to flag anything that doesn't match any alias, and everywhere
+# else Type gets matched (age group filter, gender cross-tab, room allocation), so
+# a typo'd or differently-worded Type value shows up as a visible flag instead of
+# just silently vanishing from every downstream feature.
+
+
+def canonicalize_type(value):
+    """Returns the canonical type name (a TYPE_ALIASES key) for a raw Type value,
+    matching against any of its known aliases after whitespace/case normalization,
+    or None if the value doesn't match any known type at all."""
+    normalized = " ".join(str(value).split()).strip().lower()
+    for canonical, aliases in TYPE_ALIASES.items():
+        if normalized in aliases:
+            return canonical
+    return None
 
 
 def normalize_header(s):
@@ -234,17 +251,18 @@ dob_col = column_lookup.get("Date of Birth(DD/MM/YYYY)")
 meal_col = column_lookup.get("Meal Preference  (Veg/Non Veg/Jain)")
 type_col = column_lookup.get("Type")
 
+canonical_type_col = None
 if type_col:
-    type_norm_check = df[type_col].astype(str).str.strip().str.lower()
-    is_known = type_norm_check.isin(KNOWN_TYPES)
+    canonical_type_col = df[type_col].apply(canonicalize_type)
+    is_known = canonical_type_col.notna()
     if (~is_known).any():
         unrecognized = df.loc[~is_known, type_col].astype(str).str.strip()
         unrecognized_counts = unrecognized.value_counts()
         st.warning(
-            "Some rows have a Type value that doesn't match Student, Teacher, or "
-            "CHE/Trip Leader/CHTL. They're excluded from Student Age Group and Room "
-            "Allocation (both need an exact match to work), but will still appear as "
-            "their own row in the Gender breakdown below:\n\n"
+            "Some rows have a Type value that doesn't match Student, Teacher, or any "
+            "of CHE/Trip Leader/CHTL. They're excluded from Student Age Group and Room "
+            "Allocation (both need a recognized type to work), but will still appear "
+            "as their own row in the Gender breakdown below:\n\n"
             + "\n".join(f"- \"{val}\" — {count} row(s)" for val, count in unrecognized_counts.items())
         )
 
@@ -275,7 +293,7 @@ with analysis_cols[1]:
     st.caption("Student Age Group")
     if dob_col:
         if type_col:
-            is_student = df[type_col].astype(str).str.strip().str.lower() == "student"
+            is_student = canonical_type_col == "Student"
             dob_series = df.loc[is_student, dob_col]
         else:
             dob_series = df[dob_col]
@@ -435,22 +453,22 @@ if st.button("Allocate Room"):
         st.warning("Both the Gender and Type headers are needed to allocate rooms.")
     else:
         gender_norm = df[gender_col].astype(str).str.strip().str.lower()
-        type_norm = df[type_col].astype(str).str.strip().str.lower()
+        type_canonical = canonical_type_col
 
-        # (row label, type-matching value, room settings key, gender to match)
+        # (row label, canonical type to match, room settings key, gender to match)
         groups = [
-            ("Boys", "student", "Students", "male"),
-            ("Girls", "student", "Students", "female"),
-            ("Male Teachers", "teacher", "Teacher", "male"),
-            ("Female Teachers", "teacher", "Teacher", "female"),
-            ("Male CHTL", "che/trip leader/chtl", "CHE/Trip Leader/ CHTL", "male"),
-            ("Female CHTL", "che/trip leader/chtl", "CHE/Trip Leader/ CHTL", "female"),
+            ("Boys", "Student", "Students", "male"),
+            ("Girls", "Student", "Students", "female"),
+            ("Male Teachers", "Teacher", "Teacher", "male"),
+            ("Female Teachers", "Teacher", "Teacher", "female"),
+            ("Male CHTL", "CHE/Trip Leader/CHTL", "CHE/Trip Leader/ CHTL", "male"),
+            ("Female CHTL", "CHE/Trip Leader/CHTL", "CHE/Trip Leader/ CHTL", "female"),
         ]
 
         all_sizes_used = set()
         row_results = []
         for label, type_match, settings_key, gender_match in groups:
-            count = int(((type_norm == type_match) & (gender_norm == gender_match)).sum())
+            count = int(((type_canonical == type_match) & (gender_norm == gender_match)).sum())
             max_size, min_size = room_settings[settings_key]
             allocation = allocate_rooms(count, max_size, min_size) if count else {}
             all_sizes_used.update(allocation.keys())
@@ -495,4 +513,3 @@ if combined_parts:
         "📥 Download Analysed Data",
         combined_csv, "analysed_data.csv", "text/csv",
     )
-    
