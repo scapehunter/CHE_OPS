@@ -1,3 +1,6 @@
+import csv
+import io
+
 import pandas as pd
 import streamlit as st
 
@@ -5,11 +8,38 @@ st.title("🔍 Compare Datasets")
 st.write("Upload two datasets (CSV or Excel), match them on a common column, and see them merged side by side.")
 
 
-def read_dataset(uploaded_file):
+def read_dataset_raw(uploaded_file):
+    """Reads the file with no header interpretation at all - every row, including
+    whatever the real header row is, comes back as plain data. Used only to build
+    the preview a person picks their header row from.
+
+    For CSV specifically, this deliberately avoids pandas' normal CSV parser: it
+    enforces a consistent column count inferred from the first row, which fails
+    outright on exactly the kind of messy file this feature exists for (e.g. a
+    single-cell title row followed by much wider data rows) - not a misread, a
+    hard crash. Reading via the csv module and padding ragged rows to the widest
+    row's length sidesteps that, since a raw preview has no "correct" column count
+    to enforce yet anyway - that's only decided once a header row is chosen.
+    """
+    uploaded_file.seek(0)
     name = uploaded_file.name.lower()
     if name.endswith(".csv"):
-        return pd.read_csv(uploaded_file)
-    return pd.read_excel(uploaded_file)
+        text = uploaded_file.read().decode("utf-8-sig", errors="replace")
+        rows = list(csv.reader(io.StringIO(text)))
+        max_cols = max((len(r) for r in rows), default=0)
+        padded = [r + [""] * (max_cols - len(r)) for r in rows]
+        return pd.DataFrame(padded)
+    return pd.read_excel(uploaded_file, header=None)
+
+
+def read_dataset(uploaded_file, header_row):
+    """Re-reads the same file, this time telling pandas which row (0-indexed) is
+    the real header - everything before that row is dropped, not just skipped."""
+    uploaded_file.seek(0)
+    name = uploaded_file.name.lower()
+    if name.endswith(".csv"):
+        return pd.read_csv(uploaded_file, header=header_row)
+    return pd.read_excel(uploaded_file, header=header_row)
 
 
 col_a, col_b = st.columns(2)
@@ -25,12 +55,33 @@ if not (file_a and file_b):
     st.stop()
 
 try:
-    df_a = read_dataset(file_a)
-    df_b = read_dataset(file_b)
+    raw_a = read_dataset_raw(file_a)
+    raw_b = read_dataset_raw(file_b)
 except Exception as e:
     st.error(f"Couldn't read one of the files: {e}")
     st.stop()
 
+st.caption("Preview shows the raw rows, unlabeled - pick which row number is the real header for each file.")
+col_header_a, col_header_b = st.columns(2)
+with col_header_a:
+    st.dataframe(raw_a.head(10), use_container_width=True)
+    header_row_a = st.number_input(
+        "Header row for Dataset A", min_value=0, max_value=max(len(raw_a) - 1, 0), value=0, key="header_a",
+    )
+with col_header_b:
+    st.dataframe(raw_b.head(10), use_container_width=True)
+    header_row_b = st.number_input(
+        "Header row for Dataset B", min_value=0, max_value=max(len(raw_b) - 1, 0), value=0, key="header_b",
+    )
+
+try:
+    df_a = read_dataset(file_a, header_row_a)
+    df_b = read_dataset(file_b, header_row_b)
+except Exception as e:
+    st.error(f"Couldn't re-read one of the files with that header row: {e}")
+    st.stop()
+
+st.caption("Parsed using the header row you picked above:")
 with col_a:
     st.caption(f"{len(df_a)} rows, {len(df_a.columns)} columns")
     st.dataframe(df_a.head(), use_container_width=True)
