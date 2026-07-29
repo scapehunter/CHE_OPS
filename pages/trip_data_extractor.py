@@ -298,7 +298,7 @@ if combined_parts:
     combined_csv = combined_df.to_csv(index=False).encode("utf-8")
     st.download_button(
         "📥 Download Analysed Data",
-        combined_csv, "timewise_itinerary_combined.csv", "text/csv",
+        combined_csv, "analysed_data.csv", "text/csv",
     )
 
 
