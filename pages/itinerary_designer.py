@@ -8,6 +8,13 @@ from itinerary_logic import (
     expand_activity_or_meal, fill_missing_meals, flag_time_sensitive_deviations, get_program, load_rules,
 )
 
+try:
+    from sun_times import get_sunrise_sunset, ASTRAL_AVAILABLE as SUN_TIMES_AVAILABLE
+except ImportError:
+    # sun_times.py missing, or astral not installed - the whole feature is simply
+    # unavailable rather than breaking the page. Nothing else in the app depends on it.
+    SUN_TIMES_AVAILABLE = False
+
 st.title("🗺️ Itinerary Designer")
 st.write("**Stage 1: Trip skeleton** — enter arrival/departure details to lay out the day-by-day plan grid.")
 
@@ -348,6 +355,13 @@ if "stage1_grid" in st.session_state:
 
             st.markdown(f"#### {d['label']}")
 
+            if SUN_TIMES_AVAILABLE:
+                coords = rules_data.get("coordinates", {}).get("destinations", {}).get(grid["program_location"])
+                if coords:
+                    sunrise, sunset = get_sunrise_sunset(coords["lat"], coords["lon"], d["date"])
+                    if sunrise and sunset:
+                        st.caption(f"🌅 Sunrise {sunrise}  ·  🌇 Sunset {sunset}")
+
             editor_key = f"stage3_editor_{date_iso}"
             pending_key = f"pending_shift_{date_iso}"
 
@@ -666,4 +680,3 @@ if "stage1_grid" in st.session_state:
                 "📥 Download Combined Timewise Itinerary (all days)",
                 combined_csv, "timewise_itinerary_combined.csv", "text/csv",
             )
-            
