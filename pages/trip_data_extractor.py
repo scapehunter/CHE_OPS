@@ -252,9 +252,22 @@ meal_col = column_lookup.get("Meal Preference  (Veg/Non Veg/Jain)")
 type_col = column_lookup.get("Type")
 
 canonical_type_col = None
+type_display_labels = {"Student": "Students", "Teacher": "Teacher", "CHE/Trip Leader/CHTL": "CHE/Trip Leader/CHTL"}
+# Fallback labels, used only if a given type has zero matching rows in the file
+# (nothing to derive an actual term from).
+
 if type_col:
     canonical_type_col = df[type_col].apply(canonicalize_type)
     is_known = canonical_type_col.notna()
+
+    for canonical in TYPE_ALIASES:
+        matching_raw_values = df.loc[canonical_type_col == canonical, type_col].astype(str).str.strip()
+        if not matching_raw_values.empty:
+            # Whichever exact term is most common in the file for this type - so
+            # the UI shows "CHTL" or "Trip Leader" (whatever the file actually
+            # uses), not a generic combined label the person never typed themselves.
+            type_display_labels[canonical] = matching_raw_values.value_counts().idxmax()
+
     if (~is_known).any():
         unrecognized = df.loc[~is_known, type_col].astype(str).str.strip()
         unrecognized_counts = unrecognized.value_counts()
@@ -278,14 +291,14 @@ with analysis_cols[0]:
             type_series.name = "Type"
             gender_cross = pd.crosstab(type_series, gender_series).reset_index()
             st.dataframe(gender_cross, use_container_width=True, hide_index=True)
-            combined_parts.append(gender_cross)
+            combined_parts.append(("Gender Breakdown (by Type)", gender_cross))
         else:
             gender_counts = gender_series.value_counts()
             st.dataframe(
                 pd.DataFrame({"Gender": gender_counts.index, "Count": gender_counts.values}),
                 use_container_width=True, hide_index=True,
             )
-            combined_parts.append(pd.DataFrame({"Gender": gender_counts.index, "Count": gender_counts.values}))
+            combined_parts.append(("Gender Breakdown", pd.DataFrame({"Gender": gender_counts.index, "Count": gender_counts.values})))
     else:
         st.caption("Header not found")
 
@@ -317,10 +330,7 @@ with analysis_cols[1]:
             "Age Group": bracket_order,
             "Count": [bracket_counts.get(label, 0) for label in bracket_order],
         })
-        combined_parts.append(pd.DataFrame({
-            "Age Group": bracket_order,
-            "Count": [bracket_counts.get(label, 0) for label in bracket_order],
-        }))
+        combined_parts.append(("Student Age Group", age_table))
         st.dataframe(age_table, use_container_width=True, hide_index=True)
     else:
         st.caption("Header not found")
@@ -333,7 +343,7 @@ with analysis_cols[2]:
             pd.DataFrame({"Meal Preference": meal_counts.index, "Count": meal_counts.values}),
             use_container_width=True, hide_index=True,
         )
-        combined_parts.append(pd.DataFrame({"Meal Preference": meal_counts.index, "Count": meal_counts.values}))
+        combined_parts.append(("Meal Preference Breakdown", pd.DataFrame({"Meal Preference": meal_counts.index, "Count": meal_counts.values})))
     else:
         st.caption("Header not found")
 
@@ -347,7 +357,7 @@ if filtered_df.empty:
     st.info("🎉 No food allergies reported for these students.")
 else:
     st.dataframe(filtered_df[["Student Name", "Food allergies"]])
-    combined_parts.append(filtered_df[["Student Name", "Food allergies"]])
+    combined_parts.append(("Food Allergies", filtered_df[["Student Name", "Food allergies"]]))
 
 
 
@@ -359,7 +369,7 @@ if filtered_df.empty:
     st.info("🎉 No Other allergies reported for these students.")
 else:
     st.dataframe(filtered_df[["Student Name", "Other allergies"]])
-    combined_parts.append(filtered_df[["Student Name", "Other allergies"]])
+    combined_parts.append(("Other Allergies", filtered_df[["Student Name", "Other allergies"]]))
 
 st.caption("Specific Medical condition (if any)")
 
@@ -370,7 +380,7 @@ if filtered_df.empty:
     st.info("🎉 No Specific Medical condition reported for these students.")
 else:
     st.dataframe(filtered_df[["Student Name", spec_medical_cols[0]]])
-    combined_parts.append(filtered_df[["Student Name", spec_medical_cols[0]]])
+    combined_parts.append(("Specific Medical Condition", filtered_df[["Student Name", spec_medical_cols[0]]]))
 
 
 st.caption("Present Medication")
@@ -382,7 +392,7 @@ if filtered_df.empty:
     st.info("🎉 No student is presently on medication.")
 else:
     st.dataframe(filtered_df[["Student Name", spec_medical_cols[0]]])
-    combined_parts.append(filtered_df[["Student Name", spec_medical_cols[0]]])
+    combined_parts.append(("Present Medication", filtered_df[["Student Name", spec_medical_cols[0]]]))
 
 
 def allocate_rooms(count, max_size, min_size):
@@ -439,12 +449,13 @@ st.caption(
 
 room_input_cols = st.columns(3)
 room_settings = {}
-for col, participant_type in zip(room_input_cols, ["Students", "Teacher", "CHE/Trip Leader/ CHTL"]):
+for col, canonical in zip(room_input_cols, TYPE_ALIASES.keys()):
+    display_label = type_display_labels[canonical]
     with col:
-        st.markdown(f"**{participant_type}**")
-        max_size = st.number_input(f"Max in a Room ({participant_type})", min_value=1, value=3, key=f"max_{participant_type}")
-        min_size = st.number_input(f"Min in a Room ({participant_type})", min_value=1, max_value=max_size, value=min(2, max_size), key=f"min_{participant_type}")
-        room_settings[participant_type] = (max_size, min_size)
+        st.markdown(f"**{display_label}**")
+        max_size = st.number_input(f"Max in a Room ({display_label})", min_value=1, value=3, key=f"max_{canonical}")
+        min_size = st.number_input(f"Min in a Room ({display_label})", min_value=1, max_value=max_size, value=min(2, max_size), key=f"min_{canonical}")
+        room_settings[canonical] = (max_size, min_size)
 
 if st.button("Allocate Room"):
     if not (gender_col and type_col):
@@ -452,22 +463,23 @@ if st.button("Allocate Room"):
     else:
         gender_norm = df[gender_col].astype(str).str.strip().str.lower()
         type_canonical = canonical_type_col
+        chtl_label = type_display_labels["CHE/Trip Leader/CHTL"]
 
-        # (row label, canonical type to match, room settings key, gender to match)
+        # (row label, canonical type to match, gender to match)
         groups = [
-            ("Boys", "Student", "Students", "male"),
-            ("Girls", "Student", "Students", "female"),
-            ("Male Teachers", "Teacher", "Teacher", "male"),
-            ("Female Teachers", "Teacher", "Teacher", "female"),
-            ("Male CHTL", "CHE/Trip Leader/CHTL", "CHE/Trip Leader/ CHTL", "male"),
-            ("Female CHTL", "CHE/Trip Leader/CHTL", "CHE/Trip Leader/ CHTL", "female"),
+            ("Boys", "Student", "male"),
+            ("Girls", "Student", "female"),
+            ("Male Teachers", "Teacher", "male"),
+            ("Female Teachers", "Teacher", "female"),
+            (f"Male {chtl_label}", "CHE/Trip Leader/CHTL", "male"),
+            (f"Female {chtl_label}", "CHE/Trip Leader/CHTL", "female"),
         ]
 
         all_sizes_used = set()
         row_results = []
-        for label, type_match, settings_key, gender_match in groups:
+        for label, type_match, gender_match in groups:
             count = int(((type_canonical == type_match) & (gender_norm == gender_match)).sum())
-            max_size, min_size = room_settings[settings_key]
+            max_size, min_size = room_settings[type_match]
             allocation = allocate_rooms(count, max_size, min_size) if count else {}
             all_sizes_used.update(allocation.keys())
             row_results.append({"label": label, "count": count, "allocation": allocation})
@@ -501,12 +513,30 @@ if st.button("Allocate Room"):
 
 if "room_allocation_table" in st.session_state:
     st.dataframe(st.session_state["room_allocation_table"], use_container_width=True, hide_index=True)
-    combined_parts.append(st.session_state["room_allocation_table"])
+    combined_parts.append(("Room Allocation", st.session_state["room_allocation_table"]))
+
+
+def build_sectioned_csv(sections):
+    """
+    sections: list of (title, dataframe) tuples of possibly very different shapes
+    (a 2-column breakdown next to a wide room-allocation table, next to a Student
+    Name + value list). Concatenating these directly would silently union every
+    table's columns into one flat table, leaving most cells blank in a confusing
+    way. Instead, each table gets its own title line, written as its own clean CSV
+    block, separated from the next by a blank line - the standard convention for
+    exporting several distinct summaries into a single file.
+    """
+    buffer = io.StringIO()
+    for i, (title, section_df) in enumerate(sections):
+        if i > 0:
+            buffer.write("\n")
+        buffer.write(f"{title}\n")
+        section_df.to_csv(buffer, index=False)
+    return buffer.getvalue().encode("utf-8")
 
 
 if combined_parts:
-    combined_df = pd.concat(combined_parts, ignore_index=True)
-    combined_csv = combined_df.to_csv(index=False).encode("utf-8")
+    combined_csv = build_sectioned_csv(combined_parts)
     st.download_button(
         "📥 Download Analysed Data",
         combined_csv, "analysed_data.csv", "text/csv",
