@@ -244,7 +244,7 @@ st.download_button("Download as CSV", csv_bytes, "trip_data.csv", "text/csv")
 st.caption("Food Allergies")
 st.dataframe(
     df.loc[
-        (df["Food allergies"] != "") || (df["Food allergies"].notna()),
+        (df["Food allergies"] != "") | (df["Food allergies"].notna()),
         ["Student Name", "Food allergies"],
     ]
 )
