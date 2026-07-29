@@ -271,7 +271,7 @@ def expand_activity_or_meal(
     anchor_dt, day_date, kind, name, duration_minutes,
     transfer_required, transfer_minutes,
     meal_stop_required, meal_stop_minutes,
-    meal_rules, accommodation_details=None, time_sensitive=False,
+    meal_rules, accommodation_details=None, time_sensitive=False, skip_window_snap=False,
 ):
     """
     Shared expansion logic for a single Activity or Meal entry, starting at anchor_dt.
@@ -296,13 +296,13 @@ def expand_activity_or_meal(
 
     A "Meal" kind is snapped forward to the average (midpoint) of its rule's window if
     the moment it would actually start (i.e. after any transfer, not when the transfer
-    begins) is earlier than that - UNLESS time_sensitive is True, in which case the
-    entered time is respected exactly rather than silently overridden (that's the whole
-    point of marking it time-sensitive - it also means _original_time correctly reflects
-    what was actually entered, not a snapped value). Either way, it's flagged with a
-    note if it would start after the window closes - the whole chain (including the
-    preceding transfer-to time) shifts together when a snap does happen, so the transfer
-    duration itself stays correct.
+    begins) is earlier than that - UNLESS time_sensitive is True (the entered time is
+    respected exactly, since that's the whole point of marking it time-sensitive) OR
+    skip_window_snap is True (the anchor was already deliberately computed by a gap-fill
+    placement elsewhere, and shouldn't be second-guessed here). Either way, it's flagged
+    with a note if it would start after the window closes - the whole chain (including
+    the preceding transfer-to time) shifts together when a snap does happen, so the
+    transfer duration itself stays correct.
     """
     accommodation_label = accommodation_details or "accommodation"
 
@@ -325,7 +325,7 @@ def expand_activity_or_meal(
             window_end_dt = datetime.combine(day_date, datetime.min.time()) + timedelta(
                 minutes=_parse_hhmm(meal_rule["window_end"]))
             average_dt = window_start_dt + (window_end_dt - window_start_dt) / 2
-            if start_dt < average_dt and not time_sensitive:
+            if start_dt < average_dt and not time_sensitive and not skip_window_snap:
                 # Nothing earlier in the sequence has already pushed this meal past its
                 # natural midpoint - anchor it there rather than at window_start, so a
                 # meal added with no other context lands at a genuinely typical time for
@@ -370,7 +370,10 @@ def expand_activity_or_meal(
     return rows, end_dt
 
 
-def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_slot_starts, accommodation_details=None):
+def build_stage3_timeline(
+    timed_events, stage2_activities, meal_rules, default_slot_starts,
+    accommodation_details=None, transfer_rules=None, cascade_buffer_minutes=5,
+):
     """
     Merges Stage 1's exact-timed logistics events with Stage 2's slot-level activities
     into one chronologically sorted timewise itinerary.
@@ -397,8 +400,26 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
       require a transfer - e.g. "Transfer back to Nirvana Shillong" - falls back to a
       generic "accommodation" if not given.
 
-    Each Stage 2 item is expanded via expand_activity_or_meal() and sequenced back to
-    back within its (date, slot) group, in insertion order.
+    transfer_rules/cascade_buffer_minutes: needed for meal placement (see below) - a
+      meal's own transfer, if it has one, needs a washroom-break-adjusted duration
+      estimate to search for a gap correctly, and the gap search itself uses the same
+      buffer as everything else in the system.
+
+    Processing happens in two passes:
+
+    Pass 1 - every non-meal activity, and every time-sensitive meal, is expanded via
+    expand_activity_or_meal() and sequenced back to back within its (date, slot) group,
+    in insertion order (unchanged from before).
+
+    Pass 2 - every OTHER meal (i.e. not time-sensitive) is placed afterward, one at a
+    time in insertion order, using a first-fit gap search within that meal's own
+    window: try the window's start first; if that's blocked by something already
+    placed within the window (from pass 1, Stage 1's own events, or an earlier pass-2
+    meal that day), try immediately after that conflict plus cascade_buffer_minutes,
+    and repeat. If nothing fits before the window closes, the last attempted position
+    is used anyway and flagged as outside the window - this is deliberately run as a
+    separate, later pass: a first-fit search needs to know what's already occupying
+    the window, which doesn't exist yet during pass 1's own processing.
 
     Returns a list of {"Date": str, "Time": str, "Activity": str, "Type": str, "Notes":
     str, "_group": int, "_order": int} rows, sorted chronologically across the whole
@@ -408,6 +429,9 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
     the order they were added, once a later insert pushes into them (Stage 1's own
     events all get _order 0, since they exist before any Stage 2 addition).
     """
+    transfer_rules = transfer_rules or {}
+    meal_rule_by_name = {m["name"]: m for m in meal_rules}
+
     rows = []
     group_id = 0
     for event in timed_events:
@@ -419,8 +443,17 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
         })
         group_id += 1
 
-    grouped = defaultdict(list)
+    # Pass 1: everything except non-time-sensitive meals - unchanged sequential logic.
+    gap_fill_meals = []
+    sequential_items = []
     for a in stage2_activities:
+        if a["kind"] == "Meal" and not a.get("time_sensitive"):
+            gap_fill_meals.append(a)
+        else:
+            sequential_items.append(a)
+
+    grouped = defaultdict(list)
+    for a in sequential_items:
         grouped[(a["date"], a["slot"])].append(a)
 
     for (day_date, slot_name), activities in grouped.items():
@@ -449,6 +482,79 @@ def build_stage3_timeline(timed_events, stage2_activities, meal_rules, default_s
             for r in new_rows:
                 r["_group"] = this_group
                 r["_order"] = a["order"] + 1  # >0, so Stage 2 items always rank after Stage 1's 0s
+            rows.extend(new_rows)
+
+    # Pass 2: non-time-sensitive meals, placed one day at a time via first-fit gap
+    # search, checking only against what falls within that meal's own window.
+    gap_fill_by_day = defaultdict(list)
+    for a in gap_fill_meals:
+        gap_fill_by_day[a["date"]].append(a)
+
+    for day_date, meals in gap_fill_by_day.items():
+        for a in sorted(meals, key=lambda a: a["order"]):
+            meal_rule = meal_rule_by_name.get(a["name"])
+            if not meal_rule:
+                # No window defined for this meal name - fall back to the plain
+                # sequential slot anchor as a safe default, same as before this change.
+                start_str = default_slot_starts.get(a["slot"], "09:00")
+                anchor_dt = datetime.combine(day_date, datetime.min.time()) + timedelta(minutes=_parse_hhmm(start_str))
+                new_rows, _ = expand_activity_or_meal(
+                    anchor_dt, day_date, a["kind"], a["name"], a["duration_minutes"],
+                    a["transfer_required"], a["transfer_minutes"],
+                    a.get("meal_stop_required", False), a.get("meal_stop_minutes"),
+                    meal_rules, accommodation_details, time_sensitive=False,
+                )
+            else:
+                window_start_dt = datetime.combine(day_date, datetime.min.time()) + timedelta(
+                    minutes=_parse_hhmm(meal_rule["window_start"]))
+                window_end_dt = datetime.combine(day_date, datetime.min.time()) + timedelta(
+                    minutes=_parse_hhmm(meal_rule["window_end"]))
+
+                # The total span this meal needs to fit, including any transfer (both
+                # legs, washroom-break-adjusted the same way expand_activity_or_meal
+                # itself would) - the gap search needs to reserve room for the whole
+                # thing, not just the core meal duration.
+                total_span_minutes = a["duration_minutes"]
+                if a["transfer_required"] and a["transfer_minutes"]:
+                    effective_transfer, _ = apply_washroom_break(a["transfer_minutes"], transfer_rules)
+                    total_span_minutes += 2 * effective_transfer
+
+                # Occupied intervals: the [start, end] span of every OTHER group already
+                # placed on this day, clipped to this meal's own window by
+                # find_first_fit_slot itself - nothing outside the window matters here.
+                group_spans = {}
+                for r in rows:
+                    if r["dt"].date() != day_date:
+                        continue
+                    gid = r["_group"]
+                    if gid not in group_spans:
+                        group_spans[gid] = [r["dt"], r["dt"]]
+                    else:
+                        group_spans[gid][0] = min(group_spans[gid][0], r["dt"])
+                        group_spans[gid][1] = max(group_spans[gid][1], r["dt"])
+                occupied = [tuple(v) for v in group_spans.values()]
+
+                block_start, block_end, fits = find_first_fit_slot(
+                    window_start_dt, window_end_dt, total_span_minutes, occupied, cascade_buffer_minutes
+                )
+                anchor_dt = block_start
+                new_rows, _ = expand_activity_or_meal(
+                    anchor_dt, day_date, a["kind"], a["name"], a["duration_minutes"],
+                    a["transfer_required"], a["transfer_minutes"],
+                    a.get("meal_stop_required", False), a.get("meal_stop_minutes"),
+                    meal_rules, accommodation_details, time_sensitive=False, skip_window_snap=True,
+                )
+                if not fits:
+                    window_note = f"⚠️ outside usual {a['name']} window ({meal_rule['window_start']}-{meal_rule['window_end']})"
+                    for r in new_rows:
+                        if r["Activity"] == f"{a['name']} starts":
+                            r["Notes"] = f"{r['Notes']}; {window_note}" if r["Notes"] else window_note
+
+            this_group = group_id
+            group_id += 1
+            for r in new_rows:
+                r["_group"] = this_group
+                r["_order"] = a["order"] + 1
             rows.extend(new_rows)
 
     rows.sort(key=lambda r: r["dt"])
@@ -594,6 +700,46 @@ def fill_missing_meals(stage2_activities, meal_rules, days, arrival_dt, departur
 
 
 TIME_SENSITIVE_WARNING_PREFIX = "⚠️ time-sensitive item moved from original"
+
+
+def find_first_fit_slot(window_start_dt, window_end_dt, duration_minutes, occupied_intervals, buffer_minutes):
+    """
+    Finds where a block of duration_minutes should go within [window_start_dt,
+    window_end_dt), given other things already occupying parts of that window.
+
+    Algorithm: try window_start_dt first. If that overlaps an occupied interval, try
+    immediately after that interval plus buffer_minutes, and repeat through each
+    occupied interval in order. If nothing fits before window_end_dt is reached, the
+    last attempted position is returned anyway (with fits=False), so a genuinely
+    impossible day still gets a definite answer rather than nothing - the caller is
+    expected to flag it rather than silently drop it.
+
+    occupied_intervals: list of (start_dt, end_dt) tuples for things already placed
+      that might overlap the window - anything entirely outside the window is ignored,
+      and anything only partially overlapping is clipped to the window's bounds first.
+
+    Returns (start_dt, end_dt, fits: bool).
+    """
+    relevant = sorted(
+        (max(s, window_start_dt), min(e, window_end_dt))
+        for s, e in occupied_intervals
+        if e > window_start_dt and s < window_end_dt
+    )
+    merged = []
+    for s, e in relevant:
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+
+    candidate_start = window_start_dt
+    for s, e in merged:
+        candidate_end = candidate_start + timedelta(minutes=duration_minutes)
+        if candidate_end <= s:
+            return candidate_start, candidate_end, True
+        candidate_start = e + timedelta(minutes=buffer_minutes)
+    candidate_end = candidate_start + timedelta(minutes=duration_minutes)
+    return candidate_start, candidate_end, candidate_end <= window_end_dt
 
 
 def flag_time_sensitive_deviations(df):

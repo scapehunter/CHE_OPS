@@ -292,6 +292,8 @@ if "stage1_grid" in st.session_state:
                 grid["timed_events"], stage2_with_meals,
                 meal_rules, rules_data["default_slot_starts"],
                 accommodation_details=accommodation_details,
+                transfer_rules=rules_data["transfer_rules"],
+                cascade_buffer_minutes=rules_data.get("cascade_buffer_minutes", 5),
             )
             stage3_dfs = {}
             for d in grid["days"]:
