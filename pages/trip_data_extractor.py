@@ -26,7 +26,7 @@ EXPECTED_HEADERS = {
     "Medical Details": [
         "Food allergies",
         "Other allergies",
-        "Specific Medical condition(if any)",
+        "Specific Medical condition (if any)",
         "Present Medication (if any)",
     ],
     "Insurance Details": [
@@ -262,14 +262,15 @@ else:
     st.dataframe(filtered_df[["Student Name", "Other allergies"]])
 
 
-st.caption("Specific Medical condition")
+st.caption("Specific Medical condition (if any)")
 
 # Drops NaN values, strips hidden spaces, and removes completely blank text rows
-filtered_df = df[df["Specific Medical condition(if any)"].notna() & (df["Specific Medical condition(if any)"].astype(str).str.strip() != "") & (df["Specific Medical condition(if any)"].astype(str).str.lower().str.strip() != "na") & (df["Specific Medical condition(if any)"].astype(str).str.lower().str.strip() != "no")]
+spec_medical_cols = [col for col in df.columns if col.strip().startswith("Specific Medical condition")]
+filtered_df = df[df[spec_medical_cols[0]].notna() & (df[spec_medical_cols[0]].astype(str).str.strip() != "") & (df[spec_medical_cols[0]].astype(str).str.lower().str.strip() != "na") & (df[spec_medical_cols[0]].astype(str).str.lower().str.strip() != "no")]
 if filtered_df.empty:
     st.info("🎉 No Specific Medical condition reported for these students.")
 else:
-    st.dataframe(filtered_df[["Student Name", "Specific Medical condition(if any)"]])
+    st.dataframe(filtered_df[["Student Name", spec_medical_cols[0]]])
 
 
 
