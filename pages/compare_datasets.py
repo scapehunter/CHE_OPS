@@ -63,39 +63,44 @@ except Exception as e:
     st.error(f"Couldn't read one of the files: {e}")
     st.stop()
 
-st.caption("Enter which row number is the real header for each file, then check it against the raw preview below.")
+st.caption("Enter which row number is the real header for each file - the preview below updates once you do.")
 col_header_a, col_header_b = st.columns(2)
+
 with col_header_a:
     header_row_a = st.number_input(
         f"Header row for {label_a} *", min_value=0, max_value=max(len(raw_a) - 1, 0),
         value=None, placeholder="Enter a row number", key="header_a_row",
     )
-    st.dataframe(raw_a.head(10), use_container_width=True)
+    if header_row_a is None:
+        st.dataframe(raw_a.head(10), use_container_width=True)
+    else:
+        try:
+            df_a = read_dataset(file_a, header_row_a)
+            st.caption(f"{len(df_a)} rows, {len(df_a.columns)} columns")
+            st.dataframe(df_a.head(), use_container_width=True)
+        except Exception as e:
+            st.error(f"Couldn't parse with that header row: {e}")
+            df_a = None
+
 with col_header_b:
     header_row_b = st.number_input(
         f"Header row for {label_b} *", min_value=0, max_value=max(len(raw_b) - 1, 0),
         value=None, placeholder="Enter a row number", key="header_b_row",
     )
-    st.dataframe(raw_b.head(10), use_container_width=True)
+    if header_row_b is None:
+        st.dataframe(raw_b.head(10), use_container_width=True)
+    else:
+        try:
+            df_b = read_dataset(file_b, header_row_b)
+            st.caption(f"{len(df_b)} rows, {len(df_b.columns)} columns")
+            st.dataframe(df_b.head(), use_container_width=True)
+        except Exception as e:
+            st.error(f"Couldn't parse with that header row: {e}")
+            df_b = None
 
-if header_row_a is None or header_row_b is None:
-    st.info("Enter a header row number for both files (using the preview below each box) to continue.")
+if header_row_a is None or header_row_b is None or df_a is None or df_b is None:
+    st.info("Enter a valid header row number for both files to continue.")
     st.stop()
-
-try:
-    df_a = read_dataset(file_a, header_row_a)
-    df_b = read_dataset(file_b, header_row_b)
-except Exception as e:
-    st.error(f"Couldn't re-read one of the files with that header row: {e}")
-    st.stop()
-
-st.caption("Parsed using the header row you entered above:")
-with col_a:
-    st.caption(f"{len(df_a)} rows, {len(df_a.columns)} columns")
-    st.dataframe(df_a.head(), use_container_width=True)
-with col_b:
-    st.caption(f"{len(df_b)} rows, {len(df_b.columns)} columns")
-    st.dataframe(df_b.head(), use_container_width=True)
 
 st.divider()
 st.subheader("Match settings")
