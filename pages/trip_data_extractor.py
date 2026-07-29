@@ -26,7 +26,7 @@ EXPECTED_HEADERS = {
     "Medical Details": [
         "Food allergies",
         "Other allergies",
-        "Specific Medical condition and/ or Pre Existing Disease  (if any)",
+        "Specific Medical condition(if any)",
         "Present Medication (if any)",
     ],
     "Insurance Details": [
@@ -245,6 +245,31 @@ st.caption("Food Allergies")
 
 # Drops NaN values, strips hidden spaces, and removes completely blank text rows
 filtered_df = df[df["Food allergies"].notna() & (df["Food allergies"].astype(str).str.strip() != "") & (df["Food allergies"].astype(str).str.lower().str.strip() != "na") & (df["Food allergies"].astype(str).str.lower().str.strip() != "no")]
-st.dataframe(filtered_df[["Student Name", "Food allergies"]])
+if filtered_df.empty:
+    st.info("🎉 No food allergies reported for these students.")
+else:
+    st.dataframe(filtered_df[["Student Name", "Food allergies"]])
+
+
+
+st.caption("Other Allergies")
+
+# Drops NaN values, strips hidden spaces, and removes completely blank text rows
+filtered_df = df[df["Other allergies"].notna() & (df["Other allergies"].astype(str).str.strip() != "") & (df["Other allergies"].astype(str).str.lower().str.strip() != "na") & (df["Other allergies"].astype(str).str.lower().str.strip() != "no")]
+if filtered_df.empty:
+    st.info("🎉 No Other allergies reported for these students.")
+else:
+    st.dataframe(filtered_df[["Student Name", "Other allergies"]])
+
+
+st.caption("Medical Condition")
+
+# Drops NaN values, strips hidden spaces, and removes completely blank text rows
+filtered_df = df[df["Other allergies"].notna() & (df["Other allergies"].astype(str).str.strip() != "") & (df["Other allergies"].astype(str).str.lower().str.strip() != "na") & (df["Other allergies"].astype(str).str.lower().str.strip() != "no")]
+if filtered_df.empty:
+    st.info("🎉 No Other allergies reported for these students.")
+else:
+    st.dataframe(filtered_df[["Student Name", "Other allergies"]])
+
 
 
