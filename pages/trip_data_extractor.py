@@ -242,4 +242,10 @@ csv_bytes = df.to_csv(index=False).encode("utf-8")
 st.download_button("Download as CSV", csv_bytes, "trip_data.csv", "text/csv")
 
 st.caption("Food Allergies")
-st.dataframe( df.loc[df['Food allergies'] != "" OR df['Food allergies'] in Not None , ['Student Name', 'Food allergies']])
+st.dataframe(
+    df.loc[
+        (df["Food allergies"] != "") && (df["Food allergies"].notna()),
+        ["Student Name", "Food allergies"],
+    ]
+]
+
