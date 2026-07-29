@@ -388,45 +388,43 @@ else:
 def allocate_rooms(count, max_size, min_size):
     """
     Returns {room_size: room_count} for splitting `count` people into rooms sized
-    between min_size and max_size (inclusive).
+    between min_size and max_size (inclusive), using only max_size and min_size
+    themselves wherever a clean combination of the two exists.
 
-    Fills rooms at max_size first. If the leftover remainder is too small to be a
-    valid room on its own (< min_size), borrows the people back out of the last
-    max-size room and splits that combined group into two rooms as evenly as
-    possible, keeping both within [min_size, max_size] - e.g. 10 people with
-    max=3/min=2 fills three Triples (9 people) with 1 left over; since 1 < min(2),
-    the last Triple is broken open and its 3 people + the leftover 1 = 4 people
-    split evenly into two Doubles, giving Triple x2 + Double x2 for 10 total.
+    Searches for the largest number of max_size rooms (a) such that the remaining
+    people can be split evenly across some number of min_size-or-(min_size+1)-sized
+    rooms, all within [min_size, max_size]. This is a real search across every
+    possible room count, not just "fill with max, patch the one leftover room" -
+    that simpler approach can miss the actual best split entirely: 33 people at
+    Max 4/Min 3 needs 6 Quads + 3 Triples (33 = 24+9), but greedily filling with
+    Quads first leaves only 1 person over after 8 Quads, which can't be fixed by
+    only adjusting the last room - the correct split needs 2 fewer Quads to free
+    up enough people to form clean Triples instead.
     """
     if count <= 0 or max_size < min_size or min_size < 1:
         return {}
-    rooms = []
-    remaining = count
-    while remaining > 0:
-        if remaining >= max_size:
-            rooms.append(max_size)
-            remaining -= max_size
-        elif remaining >= min_size:
-            rooms.append(remaining)
-            remaining = 0
-        else:
-            if rooms:
-                last = rooms.pop()
-                total = last + remaining
-                half1 = total // 2
-                half2 = total - half1
-                if half1 >= min_size and half2 <= max_size:
-                    rooms.append(half1)
-                    rooms.append(half2)
-                else:
-                    rooms.append(total)  # can't split cleanly - one oversized room
-            else:
-                rooms.append(remaining)  # single undersized room, no way around it
-            remaining = 0
-    result = {}
-    for size in rooms:
-        result[size] = result.get(size, 0) + 1
-    return result
+
+    for a in range(count // max_size, -1, -1):
+        remainder = count - a * max_size
+        if remainder == 0:
+            return {max_size: a} if a else {}
+        min_k = -(-remainder // max_size)  # fewest rooms that could hold the remainder
+        max_k = remainder // min_size if min_size else 0  # most rooms possible at min_size each
+        for k in range(max(min_k, 1), max_k + 1):
+            base, extra = divmod(remainder, k)
+            smallest, largest = base, (base + 1 if extra else base)
+            if smallest >= min_size and largest <= max_size:
+                result = {max_size: a} if a else {}
+                if extra:
+                    result[base + 1] = result.get(base + 1, 0) + extra
+                if k - extra:
+                    result[base] = result.get(base, 0) + (k - extra)
+                return result
+
+    # No clean combination exists at all (a genuinely impossible split, e.g. 5
+    # people at Max 4/Min 3) - fall back to one room sized to fit everyone rather
+    # than losing anyone, even though it violates the stated min/max.
+    return {count: 1}
 
 
 ROOM_SIZE_NAMES = {1: "Single", 2: "Double", 3: "Triple", 4: "Quad", 5: "Quint", 6: "Hex"}
