@@ -77,7 +77,7 @@ def compute_ages(series):
     if pd.api.types.is_datetime64_any_dtype(series):
         parsed = series
     else:
-        parsed = pd.to_datetime(series, format="%d/%m/%Y", errors="coerce")
+        parsed = pd.to_datetime(series, format="%d/%b/%Y", errors="coerce")
     today = pd.Timestamp(date.today())
     ages = []
     for dob in parsed:
