@@ -22,6 +22,7 @@ EXPECTED_HEADERS = {
         "ID No",
         "ID Type(Aadhar / Passport)",
         "Meal Preference  (Veg/Non Veg/Jain)",
+        "Type",
     ],
     "Medical Details": [
         "Food allergies",
@@ -224,25 +225,40 @@ st.markdown(f"**Total number of records:** {len(df)}")
 gender_col = column_lookup.get("Gender")
 dob_col = column_lookup.get("Date of Birth(DD/MM/YYYY)")
 meal_col = column_lookup.get("Meal Preference  (Veg/Non Veg/Jain)")
+type_col = column_lookup.get("Type")
 
 analysis_cols = st.columns(3)
 
 with analysis_cols[0]:
     st.caption("Gender")
     if gender_col:
-        gender_counts = df[gender_col].fillna("(blank)").astype(str).str.strip().value_counts()
-        st.dataframe(
-            pd.DataFrame({"Gender": gender_counts.index, "Count": gender_counts.values}),
-            use_container_width=True, hide_index=True,
-        )
-        combined_parts.append(pd.DataFrame({"Gender": gender_counts.index, "Count": gender_counts.values}))
+        gender_series = df[gender_col].fillna("(blank)").astype(str).str.strip()
+        gender_series.name = "Gender"
+        if type_col:
+            type_series = df[type_col].fillna("(blank)").astype(str).str.strip()
+            type_series.name = "Type"
+            gender_cross = pd.crosstab(type_series, gender_series).reset_index()
+            st.dataframe(gender_cross, use_container_width=True, hide_index=True)
+            combined_parts.append(gender_cross)
+        else:
+            gender_counts = gender_series.value_counts()
+            st.dataframe(
+                pd.DataFrame({"Gender": gender_counts.index, "Count": gender_counts.values}),
+                use_container_width=True, hide_index=True,
+            )
+            combined_parts.append(pd.DataFrame({"Gender": gender_counts.index, "Count": gender_counts.values}))
     else:
         st.caption("Header not found")
 
 with analysis_cols[1]:
-    st.caption("Age Groups (as of today)")
+    st.caption("Student Age Group")
     if dob_col:
-        ages, valid_count, invalid_count, detected_format = compute_ages(df[dob_col])
+        if type_col:
+            is_student = df[type_col].astype(str).str.strip().str.lower() == "student"
+            dob_series = df.loc[is_student, dob_col]
+        else:
+            dob_series = df[dob_col]
+        ages, valid_count, invalid_count, detected_format = compute_ages(dob_series)
         FORMAT_DISPLAY_NAMES = {
             "%d/%m/%Y": "DD/MM/YYYY", "%d-%m-%Y": "DD-MM-YYYY", "%d.%m.%Y": "DD.MM.YYYY",
             "%m/%d/%Y": "MM/DD/YYYY", "%Y-%m-%d": "YYYY-MM-DD", "%Y/%m/%d": "YYYY/MM/DD",
@@ -250,7 +266,7 @@ with analysis_cols[1]:
         if detected_format:
             st.caption(f"Detected date format: {FORMAT_DISPLAY_NAMES.get(detected_format, detected_format)}")
         if invalid_count:
-            st.caption(f"{invalid_count}/{len(df)} DOB values didn't match the detected format - excluded")
+            st.caption(f"{invalid_count}/{len(dob_series)} DOB values didn't match the detected format - excluded")
         bracket_counts = {}
         for age in ages:
             if age is None:
@@ -337,4 +353,3 @@ if combined_parts:
         "📥 Download Analysed Data",
         combined_csv, "analysed_data.csv", "text/csv",
     )
-    
