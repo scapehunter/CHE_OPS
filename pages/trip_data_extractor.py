@@ -159,6 +159,7 @@ if df is None:
     st.info("Enter a valid header row number to continue.")
     st.stop()
 
+combined_parts = []
 st.divider()
 st.subheader("Data")
 st.caption(f"{len(df)} rows, {len(df.columns)} columns")
@@ -203,6 +204,7 @@ with analysis_cols[0]:
             pd.DataFrame({"Gender": gender_counts.index, "Count": gender_counts.values}),
             use_container_width=True, hide_index=True,
         )
+        combined_parts.append(pd.DataFrame({"Gender": gender_counts.index, "Count": gender_counts.values}))
     else:
         st.caption("Header not found")
 
@@ -223,6 +225,10 @@ with analysis_cols[1]:
             "Age Group": bracket_order,
             "Count": [bracket_counts.get(label, 0) for label in bracket_order],
         })
+        combined_parts.append(pd.DataFrame({
+            "Age Group": bracket_order,
+            "Count": [bracket_counts.get(label, 0) for label in bracket_order],
+        }))
         st.dataframe(age_table, use_container_width=True, hide_index=True)
     else:
         st.caption("Header not found")
@@ -235,20 +241,21 @@ with analysis_cols[2]:
             pd.DataFrame({"Meal Preference": meal_counts.index, "Count": meal_counts.values}),
             use_container_width=True, hide_index=True,
         )
+        combined_parts.append(pd.DataFrame({"Meal Preference": meal_counts.index, "Count": meal_counts.values}))
     else:
         st.caption("Header not found")
 
-csv_bytes = df.to_csv(index=False).encode("utf-8")
-st.download_button("Download as CSV", csv_bytes, "trip_data.csv", "text/csv")
 
 st.caption("Food Allergies")
 
 # Drops NaN values, strips hidden spaces, and removes completely blank text rows
 filtered_df = df[df["Food allergies"].notna() & (df["Food allergies"].astype(str).str.strip() != "") & (df["Food allergies"].astype(str).str.lower().str.strip() != "na") & (df["Food allergies"].astype(str).str.lower().str.strip() != "no")]
+
 if filtered_df.empty:
     st.info("🎉 No food allergies reported for these students.")
 else:
     st.dataframe(filtered_df[["Student Name", "Food allergies"]])
+    combined_parts.append(filtered_df[["Student Name", "Food allergies"]])
 
 
 
@@ -260,7 +267,7 @@ if filtered_df.empty:
     st.info("🎉 No Other allergies reported for these students.")
 else:
     st.dataframe(filtered_df[["Student Name", "Other allergies"]])
-
+    combined_parts.append(filtered_df[["Student Name", "Other allergies"]])
 
 st.caption("Specific Medical condition (if any)")
 
@@ -271,6 +278,7 @@ if filtered_df.empty:
     st.info("🎉 No Specific Medical condition reported for these students.")
 else:
     st.dataframe(filtered_df[["Student Name", spec_medical_cols[0]]])
+    combined_parts.append(filtered_df[["Student Name", spec_medical_cols[0]]])
 
 
 st.caption("Present Medication")
@@ -282,8 +290,15 @@ if filtered_df.empty:
     st.info("🎉 No student is presently on medication.")
 else:
     st.dataframe(filtered_df[["Student Name", spec_medical_cols[0]]])
+    combined_parts.append(filtered_df[["Student Name", spec_medical_cols[0]]])
 
 
-
+if combined_parts:
+    combined_df = pd.concat(combined_parts, ignore_index=True)
+    combined_csv = combined_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "📥 Download Analysed Data",
+        combined_csv, "timewise_itinerary_combined.csv", "text/csv",
+    )
 
 
