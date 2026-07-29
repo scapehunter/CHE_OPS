@@ -20,8 +20,13 @@ st.page_link(
 )
 st.page_link(
     "pages/itinerary_designer.py",
-    label="🗺️ Itinerary Designer (Under Construction)",
+    label="🗺️ Itinerary Designer",
     help="Auto-generate the travel-day schedule from flight and hotel details",
+)
+st.page_link(
+    "pages/trip_data_extractor.py",
+    label="🧳 Trip Data Extractor",
+    help="Upload a trip data file (CSV/Excel) to view it clearly",
 )
 
 # Add a link for each new tool here as you build it, e.g.:
