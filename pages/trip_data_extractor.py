@@ -68,16 +68,47 @@ def find_matching_column(expected_header, actual_columns):
     return None
 
 
+CANDIDATE_DOB_FORMATS = ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%m/%d/%Y", "%Y-%m-%d", "%Y/%m/%d"]
+# Tried in this order when detecting the DOB column's actual format - DD/MM/YYYY
+# first, since that's what the header itself specifies, but a file that's actually
+# in a different format (dashes instead of slashes, ISO order, etc.) still parses
+# correctly rather than getting every row wrongly rejected.
+
+
+def detect_dob_format(series, candidate_formats=CANDIDATE_DOB_FORMATS):
+    """
+    Tries each candidate format against the (string) DOB values, returns
+    (format, successful_parse_count) for whichever format parses the most values
+    correctly. This is a whole-column decision, not per-row guessing - important
+    for genuinely ambiguous dates like "03/04/2012" (could be 3 April or 4 March),
+    since a column with even a few unambiguous entries (a day > 12, ruling out
+    month-first) will correctly favor the right format for the whole column rather
+    than guessing row by row.
+    """
+    str_series = series.astype(str)
+    best_format, best_count = candidate_formats[0], -1
+    for fmt in candidate_formats:
+        parsed = pd.to_datetime(str_series, format=fmt, errors="coerce")
+        count = int(parsed.notna().sum())
+        if count > best_count:
+            best_count, best_format = count, fmt
+    return best_format, best_count
+
+
 def compute_ages(series):
-    """Returns (ages, valid_count, invalid_count). Handles both a column pandas has
-    already auto-parsed as real dates (typical when reading Excel, since Excel stores
-    dates as actual date values, not text) and a column of literal "DD/MM/YYYY"
-    strings (typical when reading CSV). Anything that doesn't parse as a valid date
-    in the required format is treated as invalid, not silently guessed at."""
+    """Returns (ages, valid_count, invalid_count, detected_format). Handles both a
+    column pandas has already auto-parsed as real dates (typical when reading Excel,
+    since Excel stores dates as actual date values, not text - detected_format is
+    None in this case, there's no string format to report) and a column of date
+    strings in whatever format the data actually uses, auto-detected rather than
+    assumed. Anything that doesn't parse under the detected format is treated as
+    invalid, not silently guessed at."""
     if pd.api.types.is_datetime64_any_dtype(series):
         parsed = series
+        detected_format = None
     else:
-        parsed = pd.to_datetime(series, format="%d/%m/%Y", errors="coerce")
+        detected_format, _ = detect_dob_format(series)
+        parsed = pd.to_datetime(series.astype(str), format=detected_format, errors="coerce")
     today = pd.Timestamp(date.today())
     ages = []
     for dob in parsed:
@@ -86,7 +117,7 @@ def compute_ages(series):
         else:
             age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
             ages.append(age)
-    return ages, int(parsed.notna().sum()), int(parsed.isna().sum())
+    return ages, int(parsed.notna().sum()), int(parsed.isna().sum()), detected_format
 
 
 def bracket_for_age(age):
@@ -211,9 +242,15 @@ with analysis_cols[0]:
 with analysis_cols[1]:
     st.caption("Age Groups (as of today)")
     if dob_col:
-        ages, valid_count, invalid_count = compute_ages(df[dob_col])
+        ages, valid_count, invalid_count, detected_format = compute_ages(df[dob_col])
+        FORMAT_DISPLAY_NAMES = {
+            "%d/%m/%Y": "DD/MM/YYYY", "%d-%m-%Y": "DD-MM-YYYY", "%d.%m.%Y": "DD.MM.YYYY",
+            "%m/%d/%Y": "MM/DD/YYYY", "%Y-%m-%d": "YYYY-MM-DD", "%Y/%m/%d": "YYYY/MM/DD",
+        }
+        if detected_format:
+            st.caption(f"Detected date format: {FORMAT_DISPLAY_NAMES.get(detected_format, detected_format)}")
         if invalid_count:
-            st.caption(f"{invalid_count}/{len(df)} DOB values not in DD/MM/YYYY - excluded")
+            st.caption(f"{invalid_count}/{len(df)} DOB values didn't match the detected format - excluded")
         bracket_counts = {}
         for age in ages:
             if age is None:
@@ -300,5 +337,4 @@ if combined_parts:
         "📥 Download Analysed Data",
         combined_csv, "analysed_data.csv", "text/csv",
     )
-
-
+    
