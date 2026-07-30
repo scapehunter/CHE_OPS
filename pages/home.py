@@ -10,7 +10,7 @@ st.divider()
 
 st.page_link(
     "pages/ticket_extractor.py",
-    label="🎫 Ticket Extractor",
+    label="🎫 Ticket Extraction & Verification",
     help="Extract passenger, PNR, sector, and flight details from PDF tickets",
 )
 st.page_link(

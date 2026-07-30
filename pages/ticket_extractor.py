@@ -11,7 +11,7 @@ except ImportError:
 
 from extractor import extract_ticket_data
 
-st.title("🎫 Ticket Extractor")
+st.title("🎫 Ticket Extraction & Verification")
 st.write("Upload one PDF ticket at a time, so you can review its result before moving to the next.")
 
 TRIP_TYPE_OPTIONS = {
@@ -228,3 +228,4 @@ if st.session_state.get("master_tracking"):
 
     tracking_csv = tracking_df.to_csv(index=False).encode("utf-8")
     st.download_button("Download Master Tracking as CSV", tracking_csv, "master_tracking.csv", "text/csv")
+    

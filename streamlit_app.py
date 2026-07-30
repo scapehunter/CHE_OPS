@@ -52,7 +52,7 @@ with st.sidebar:
         st.rerun()
 
 home = st.Page("pages/home.py", title="Home", icon="🏠", default=True)
-ticket_extractor = st.Page("pages/ticket_extractor.py", title="Ticket Extractor", icon="🎫")
+ticket_extractor = st.Page("pages/ticket_extractor.py", title="Ticket Extraction & Verification", icon="🎫")
 compare_datasets = st.Page("pages/compare_datasets.py", title="Compare Datasets", icon="🔍")
 itinerary_designer = st.Page("pages/itinerary_designer.py", title="Itinerary Designer", icon="🗺️")
 trip_data_extractor = st.Page("pages/trip_data_extractor.py", title="Participant Data Extractor", icon="🧳")
