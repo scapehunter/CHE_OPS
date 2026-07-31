@@ -189,3 +189,4 @@ if uploaded_file:
         st.dataframe(result_df, use_container_width=True, hide_index=True)
         csv_bytes = result_df.to_csv(index=False).encode("utf-8")
         st.download_button("Download as CSV", csv_bytes, "id_data.csv", "text/csv")
+

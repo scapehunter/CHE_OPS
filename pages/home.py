@@ -34,5 +34,6 @@ st.page_link(
     help="Extract Name, Gender, DOB, and ID Number from an Aadhaar card or Passport",
 )
 
+
 # Add a link for each new tool here as you build it, e.g.:
 # st.page_link("pages/another_tool.py", label="🛠️ Another Tool", help="...")

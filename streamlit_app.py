@@ -64,3 +64,4 @@ id_extractor = st.Page("pages/id_extractor.py", title="ID Extractor", icon="🪪
 
 pg = st.navigation([home, ticket_extractor, compare_datasets, itinerary_designer, trip_data_extractor, id_extractor])
 pg.run()
+
