@@ -6,5 +6,4 @@ pytesseract
 Pillow
 pdfplumber
 openpyxl
-PIL
 astral
