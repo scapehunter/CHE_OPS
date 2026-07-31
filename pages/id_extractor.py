@@ -1,5 +1,6 @@
 import re
 
+import pandas as pd
 import pdfplumber
 import pytesseract
 import streamlit as st
@@ -7,20 +8,23 @@ from PIL import Image
 
 st.title("🪪 ID Extractor")
 st.write(
-    "Upload an Aadhaar card or Passport (PDF, JPG, or PNG) to extract Name, Gender, "
-    "Date of Birth, and ID Number."
+    "Upload Aadhaar cards or Passports (PDF, JPG, or PNG) - all of the same type per "
+    "batch - to extract Name, Gender, Date of Birth, and ID Number."
 )
 st.info(
     "OCR on photographed ID documents isn't perfectly reliable - lighting, angle, and "
-    "print quality all affect it. Every extracted field below is editable, so review "
-    "against the actual document before using the result, rather than trusting it "
-    "blindly.",
+    "print quality all affect it. Every extracted value below is directly editable in "
+    "the table, so review against the actual documents before using the result, "
+    "rather than trusting it blindly. Rows with anything it couldn't confidently read "
+    "are flagged in the Flag column.",
     icon="ℹ️",
 )
 
 id_type = st.radio("ID Type", ["Aadhaar", "Passport"], horizontal=True)
 
-uploaded_file = st.file_uploader("Upload ID document", type=["pdf", "jpg", "jpeg", "png"], accept_multiple_files=False)
+uploaded_files = st.file_uploader(
+    "Upload ID documents", type=["pdf", "jpg", "jpeg", "png"], accept_multiple_files=True,
+)
 
 
 def best_rotation_ocr(img):
@@ -152,41 +156,71 @@ def extract_passport_fields(text):
     return result
 
 
-if uploaded_file:
-    with st.spinner("Reading document..."):
-        text, angle, confidence = ocr_uploaded_file(uploaded_file)
+if uploaded_files:
+    cache_key = f"id_extractor_rows_{id_type}"  # dict keyed by (name, size) -> row dict
+    raw_text_key = f"id_extractor_raw_texts_{id_type}"
 
-    fields = extract_aadhaar_fields(text) if id_type == "Aadhaar" else extract_passport_fields(text)
+    if cache_key not in st.session_state:
+        st.session_state[cache_key] = {}
+    if raw_text_key not in st.session_state:
+        st.session_state[raw_text_key] = {}
 
-    missing = [k for k, v in fields.items() if not v]
-    if missing:
-        st.warning(f"Couldn't confidently read: {', '.join(missing)}. Fill these in manually below.")
+    current_identities = [(f.name, f.size) for f in uploaded_files]
+    new_files = [f for f in uploaded_files if (f.name, f.size) not in st.session_state[cache_key]]
+
+    if new_files:
+        # Only OCR files that haven't been processed yet for this ID type - a file
+        # already in the results (possibly hand-edited by now) is left completely
+        # untouched, even though the uploader widget re-returns the full current
+        # file list on every rerun. Re-keying off the whole batch as one unit
+        # would silently wipe out any edit the moment a new file gets added.
+        progress = st.progress(0.0, text="Reading documents...")
+        for i, f in enumerate(new_files):
+            text, angle, confidence = ocr_uploaded_file(f)
+            fields = extract_aadhaar_fields(text) if id_type == "Aadhaar" else extract_passport_fields(text)
+            missing = [k for k, v in fields.items() if not v]
+            flag = f"⚠️ Missing: {', '.join(missing)}" if missing else ""
+            st.session_state[cache_key][(f.name, f.size)] = {
+                "File Name": f.name, "Flag": flag,
+                "Name": fields["Name"], "Gender": fields["Gender"], "DOB": fields["DOB"],
+                "ID Number": fields["ID Number"],
+            }
+            st.session_state[raw_text_key][f.name] = text
+            progress.progress((i + 1) / len(new_files), text=f"Read {i + 1}/{len(new_files)}")
+        progress.empty()
+
+    # Only show rows for files currently in the uploader - if a file gets removed
+    # from the widget, its row drops out of view too (though it stays cached, so
+    # re-adding the same file later won't trigger a needless re-OCR).
+    results_df = pd.DataFrame([st.session_state[cache_key][ident] for ident in current_identities])
+
+    flagged_count = (results_df["Flag"] != "").sum()
+    if flagged_count:
+        st.warning(f"{flagged_count} of {len(results_df)} row(s) have a field that couldn't be confidently read - check the Flag column and correct directly in the table.")
 
     st.subheader("Review & Correct")
-    col1, col2 = st.columns(2)
-    with col1:
-        name = st.text_input("Name", value=fields["Name"])
-        dob = st.text_input("Date of Birth (DD/MM/YYYY)", value=fields["DOB"])
-    with col2:
-        gender = st.selectbox(
-            "Gender", ["", "Male", "Female"],
-            index=["", "Male", "Female"].index(fields["Gender"]) if fields["Gender"] in ("", "Male", "Female") else 0,
-        )
-        id_number = st.text_input(
-            "Aadhaar Number" if id_type == "Aadhaar" else "Passport Number",
-            value=fields["ID Number"],
-        )
+    edited_df = st.data_editor(
+        results_df,
+        use_container_width=True,
+        hide_index=True,
+        disabled=["File Name", "Flag"],  # identifiers, not meant to be hand-edited
+        column_config={
+            "Gender": st.column_config.SelectboxColumn("Gender", options=["", "Male", "Female"]),
+            "ID Number": st.column_config.TextColumn("Aadhaar Number" if id_type == "Aadhaar" else "Passport Number"),
+        },
+        key=f"id_extractor_editor_{id_type}",
+    )
+    # Write edits back into the per-file cache immediately, so they survive the
+    # next rerun even if more files get added afterward.
+    for ident, (_, row) in zip(current_identities, edited_df.iterrows()):
+        st.session_state[cache_key][ident] = row.to_dict()
 
     with st.expander("Raw OCR text (for reference if something looks wrong)"):
-        st.text(text)
+        for fname, text in st.session_state[raw_text_key].items():
+            st.caption(fname)
+            st.text(text)
 
-    if name and gender and dob and id_number:
-        import pandas as pd
-        result_df = pd.DataFrame([{
-            "File Name": uploaded_file.name, "ID Type": id_type,
-            "Name": name, "Gender": gender, "DOB": dob, "ID Number": id_number,
-        }])
-        st.dataframe(result_df, use_container_width=True, hide_index=True)
-        csv_bytes = result_df.to_csv(index=False).encode("utf-8")
-        st.download_button("Download as CSV", csv_bytes, "id_data.csv", "text/csv")
-
+    output_df = edited_df.drop(columns=["Flag"]).copy()
+    output_df.insert(1, "ID Type", id_type)
+    csv_bytes = output_df.to_csv(index=False).encode("utf-8")
+    st.download_button("Download as CSV", csv_bytes, "id_data.csv", "text/csv")
