@@ -28,6 +28,11 @@ st.page_link(
     label="🧳 Participant Data Extractor",
     help="Upload a trip data file (CSV/Excel) to view it clearly",
 )
+st.page_link(
+    "pages/id_extractor.py",
+    label="🪪 ID Extractor",
+    help="Extract Name, Gender, DOB, and ID Number from an Aadhaar card or Passport",
+)
 
 # Add a link for each new tool here as you build it, e.g.:
 # st.page_link("pages/another_tool.py", label="🛠️ Another Tool", help="...")
