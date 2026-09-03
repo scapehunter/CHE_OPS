@@ -1,3 +1,5 @@
+import csv
+import io
 import re
 import streamlit as st
 import pandas as pd
@@ -71,25 +73,49 @@ def normalize_gender(gender):
     return " ".join(str(gender).split()).strip()
 
 
-def read_master_file(uploaded_file):
+def read_master_file_raw(uploaded_file):
     """
-    Returns (tracking_rows, warning). tracking_rows is a list of dicts, one per
-    master entry: {"Name", "Gender", "_key" (normalized name for matching),
-    "_gender_norm" (normalized gender), "Status", "Matched File", "Matched PNR",
-    "Gender Check"} - starts with every entry "Not Found", updated in place as
-    tickets get processed. warning is a string to display if something about the
-    file looks off (wrong shape, duplicate names), or None if everything's clean.
+    Reads the file with no header interpretation at all - every row comes back as
+    plain data, used only to build a preview for picking the real header row.
+
+    For CSV specifically, this deliberately avoids pandas' normal CSV parser: it
+    enforces a consistent column count inferred from the first row, which fails
+    outright on a file with e.g. a blank or title row above the real header (the
+    exact shape that produces this master file's "Unnamed: 0/1/2" problem) -
+    not a misread, a hard crash. Reading via the csv module and padding ragged
+    rows to the widest row's length sidesteps that entirely.
     """
     uploaded_file.seek(0)
     name = uploaded_file.name.lower()
-    try:
-        if name.endswith(".csv"):
-            master_df = pd.read_csv(uploaded_file)
-        else:
-            master_df = pd.read_excel(uploaded_file)
-    except Exception as e:
-        return [], f"Couldn't read the Master file: {e}"
+    if name.endswith(".csv"):
+        text = uploaded_file.read().decode("utf-8-sig", errors="replace")
+        rows = list(csv.reader(io.StringIO(text)))
+        max_cols = max((len(r) for r in rows), default=0)
+        padded = [r + [""] * (max_cols - len(r)) for r in rows]
+        return pd.DataFrame(padded)
+    return pd.read_excel(uploaded_file, header=None)
 
+
+def read_master_file_with_header(uploaded_file, header_row):
+    """Re-reads the file with the given row (0-indexed) as the real header -
+    everything before that row is dropped, not just skipped."""
+    uploaded_file.seek(0)
+    name = uploaded_file.name.lower()
+    if name.endswith(".csv"):
+        return pd.read_csv(uploaded_file, header=header_row)
+    return pd.read_excel(uploaded_file, header=header_row)
+
+
+def build_master_tracking(master_df):
+    """
+    Returns (tracking_rows, warning) from an already-parsed master dataframe -
+    one dict per master entry: {"Name", "Gender", "_key" (normalized name for
+    matching), "_gender_norm" (normalized gender), "Status", "Matched File",
+    "Matched PNR", "Gender Check"} - starts with every entry "Not Found",
+    updated in place as tickets get processed. warning is a string to display
+    if something about the file looks off (wrong shape, duplicate names), or
+    None if everything's clean.
+    """
     cols = {str(c).strip().lower(): c for c in master_df.columns}
     if "name" not in cols or "gender" not in cols:
         return [], (
@@ -126,27 +152,49 @@ def read_master_file(uploaded_file):
 
 
 if master_file:
-    master_identity = (master_file.name, master_file.size)
-    if st.session_state.get("master_identity") != master_identity:
-        # A new (or newly re-uploaded) Master file - start tracking fresh rather
-        # than keeping stale match state from a previous file.
-        tracking_rows, master_warning = read_master_file(master_file)
-        st.session_state["master_tracking"] = tracking_rows
-        st.session_state["master_identity"] = master_identity
-        st.session_state["master_warning"] = master_warning
+    try:
+        master_raw = read_master_file_raw(master_file)
+    except Exception as e:
+        master_raw = None
+        st.error(f"Couldn't read the Master file: {e}")
 
-    # Shown every run, not just the one where the file was first processed - a
-    # real problem with the master file (e.g. wrong column names) needs to stay
-    # visible, not disappear the moment any other widget on the page is touched
-    # (like uploading a ticket), even though the underlying problem persists.
-    if st.session_state.get("master_warning"):
-        st.warning(st.session_state["master_warning"])
+    if master_raw is not None:
+        st.caption("Enter which row number is the real header for the Master file - the preview below updates once you do.")
+        master_header_row = st.number_input(
+            "Master file header row *", min_value=0, max_value=max(len(master_raw) - 1, 0),
+            value=None, placeholder="Enter a row number", key="master_header_row",
+        )
 
-    if st.session_state.get("master_tracking"):
-        st.caption(f"Master file loaded - {len(st.session_state['master_tracking'])} name(s) being tracked.")
-        if st.button("Reset Master Tracking"):
-            for entry in st.session_state["master_tracking"]:
-                entry["Status"], entry["Matched File"], entry["Matched PNR"], entry["Gender Check"] = "Not Found", "", "", ""
+        master_identity = (master_file.name, master_file.size, master_header_row)
+        if master_header_row is None:
+            st.dataframe(master_raw.head(10), use_container_width=True)
+            st.session_state.pop("master_tracking", None)
+        else:
+            if st.session_state.get("master_identity") != master_identity:
+                # A new (or newly re-uploaded, or re-header-picked) Master file -
+                # start tracking fresh rather than keeping stale match state.
+                try:
+                    master_df = read_master_file_with_header(master_file, master_header_row)
+                    tracking_rows, master_warning = build_master_tracking(master_df)
+                except Exception as e:
+                    tracking_rows, master_warning = [], f"Couldn't parse with that header row: {e}"
+                st.session_state["master_tracking"] = tracking_rows
+                st.session_state["master_identity"] = master_identity
+                st.session_state["master_warning"] = master_warning
+
+            # Shown every run, not just the one where the file was first processed
+            # - a real problem with the master file (e.g. wrong column names)
+            # needs to stay visible, not disappear the moment any other widget on
+            # the page is touched (like uploading a ticket), even though the
+            # underlying problem persists.
+            if st.session_state.get("master_warning"):
+                st.warning(st.session_state["master_warning"])
+
+            if st.session_state.get("master_tracking"):
+                st.caption(f"Master file loaded - {len(st.session_state['master_tracking'])} name(s) being tracked.")
+                if st.button("Reset Master Tracking"):
+                    for entry in st.session_state["master_tracking"]:
+                        entry["Status"], entry["Matched File"], entry["Matched PNR"], entry["Gender Check"] = "Not Found", "", "", ""
 
 
 def build_ocr_lookup(pdf, text):
@@ -243,4 +291,3 @@ if st.session_state.get("master_tracking"):
 
     tracking_csv = tracking_df.to_csv(index=False).encode("utf-8")
     st.download_button("Download Master Tracking as CSV", tracking_csv, "master_tracking.csv", "text/csv")
-
