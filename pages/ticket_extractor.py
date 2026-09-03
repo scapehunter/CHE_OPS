@@ -95,13 +95,17 @@ def match_rows_against_master(rows):
             if entry["_key"] == key:
                 matched_files = entry.setdefault("_matched_files", [])
                 matched_pnrs = entry.setdefault("_matched_pnrs", [])
+                matched_sectors = entry.setdefault("_matched_sectors", [])
                 if row["File Name"] not in matched_files:
                     matched_files.append(row["File Name"])
                 if row["PNR"] not in matched_pnrs:
                     matched_pnrs.append(row["PNR"])
+                if row.get("Sector") and row["Sector"] not in matched_sectors:
+                    matched_sectors.append(row["Sector"])
 
                 entry["Matched File"] = ", ".join(matched_files)
                 entry["Matched PNR"] = ", ".join(matched_pnrs)
+                entry["Sector"] = ", ".join(matched_sectors)
                 entry["Status"] = f"Matched ({len(matched_files)} ticket{'s' if len(matched_files) != 1 else ''})"
 
                 extracted_gender = normalize_gender(row["Gender"])
@@ -180,8 +184,8 @@ def build_master_tracking(master_df):
         tracking_rows.append({
             "Name": row[name_col], "Gender": row[gender_col],
             "_key": key, "_gender_norm": normalize_gender(row[gender_col]),
-            "Status": "Not Found", "Matched File": "", "Matched PNR": "", "Gender Check": "",
-            "_matched_files": [], "_matched_pnrs": [],
+            "Status": "Not Found", "Matched File": "", "Matched PNR": "", "Sector": "", "Gender Check": "",
+            "_matched_files": [], "_matched_pnrs": [], "_matched_sectors": [],
         })
 
     warning = None
@@ -237,8 +241,8 @@ if master_file:
                 st.caption(f"Master file loaded - {len(st.session_state['master_tracking'])} name(s) being tracked.")
                 if st.button("Reset Master Tracking"):
                     for entry in st.session_state["master_tracking"]:
-                        entry["Status"], entry["Matched File"], entry["Matched PNR"], entry["Gender Check"] = "Not Found", "", "", ""
-                        entry["_matched_files"], entry["_matched_pnrs"] = [], []
+                        entry["Status"], entry["Matched File"], entry["Matched PNR"], entry["Sector"], entry["Gender Check"] = "Not Found", "", "", "", ""
+                        entry["_matched_files"], entry["_matched_pnrs"], entry["_matched_sectors"] = [], [], []
                     for rows in st.session_state.get("ticket_rows_cache", {}).values():
                         match_rows_against_master(rows)
                     st.rerun()
@@ -334,7 +338,7 @@ if st.session_state.get("master_tracking"):
     st.subheader("Master List Tracking")
     st.caption("Updates as each ticket is uploaded - reflects every ticket processed so far this session.")
     tracking_df = pd.DataFrame(st.session_state["master_tracking"])[
-        ["Name", "Gender", "Status", "Matched File", "Matched PNR", "Gender Check"]
+        ["Name", "Gender", "Status", "Matched File", "Matched PNR", "Sector", "Gender Check"]
     ]
     matched_count = (tracking_df["Status"] != "Not Found").sum()
     st.caption(f"{matched_count} / {len(tracking_df)} matched")
@@ -342,4 +346,5 @@ if st.session_state.get("master_tracking"):
 
     tracking_csv = tracking_df.to_csv(index=False).encode("utf-8")
     st.download_button("Download Master Tracking as CSV", tracking_csv, "master_tracking.csv", "text/csv")
+
     
