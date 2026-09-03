@@ -14,7 +14,7 @@ except ImportError:
 from extractor import extract_ticket_data
 
 st.title("🎫 Ticket Extraction & Verification")
-st.write("Upload one PDF ticket at a time, so you can review its result before moving to the next.")
+st.write("Upload one or more PDF tickets - each is extracted independently, and results build up in one combined table below.")
 
 TRIP_TYPE_OPTIONS = {
     "Auto-detect": "auto",
@@ -71,6 +71,33 @@ def normalize_gender(gender):
     if cleaned in ("F", "FEMALE"):
         return "Female"
     return " ".join(str(gender).split()).strip()
+
+
+def match_rows_against_master(rows):
+    """
+    Checks each extracted passenger row's Name against the current master
+    tracking list, updating matched entries in place (mutates
+    st.session_state["master_tracking"] directly, since it's the same list
+    object). Shared between processing a newly-uploaded ticket and re-syncing
+    after "Reset Master Tracking" is clicked, so both paths behave identically.
+    """
+    if not st.session_state.get("master_tracking"):
+        return
+    for row in rows:
+        key = normalize_name(row["Name"])
+        for entry in st.session_state["master_tracking"]:
+            if entry["_key"] == key:
+                if entry["Status"] == "Matched":
+                    # Same master name matched by more than one ticket - note it
+                    # rather than silently overwriting the first match.
+                    entry["Status"] = "Matched (duplicate ticket)"
+                else:
+                    entry["Status"] = "Matched"
+                entry["Matched File"] = row["File Name"]
+                entry["Matched PNR"] = row["PNR"]
+                extracted_gender = normalize_gender(row["Gender"])
+                entry["Gender Check"] = "✅ Match" if extracted_gender == entry["_gender_norm"] else "❌ Mismatch"
+                break
 
 
 def read_master_file_raw(uploaded_file):
@@ -195,6 +222,9 @@ if master_file:
                 if st.button("Reset Master Tracking"):
                     for entry in st.session_state["master_tracking"]:
                         entry["Status"], entry["Matched File"], entry["Matched PNR"], entry["Gender Check"] = "Not Found", "", "", ""
+                    for rows in st.session_state.get("ticket_rows_cache", {}).values():
+                        match_rows_against_master(rows)
+                    st.rerun()
 
 
 def build_ocr_lookup(pdf, text):
@@ -238,45 +268,49 @@ def extract_from_pdf(uploaded_file, trip_type):
     return rows, warning
 
 
-uploaded_file = st.file_uploader("Upload Ticket", type=["pdf"], accept_multiple_files=False)
+uploaded_files = st.file_uploader("Upload Ticket(s)", type=["pdf"], accept_multiple_files=True)
 
-if uploaded_file:
-    with st.spinner("Extracting passenger data from PDF..."):
-        rows, warning = extract_from_pdf(uploaded_file, trip_type)
+if uploaded_files:
+    if "ticket_rows_cache" not in st.session_state:
+        st.session_state["ticket_rows_cache"] = {}  # (name, size) -> list of row dicts
 
-    if warning:
-        st.warning(warning)
+    current_identities = [(f.name, f.size) for f in uploaded_files]
+    new_files = [f for f in uploaded_files if (f.name, f.size) not in st.session_state["ticket_rows_cache"]]
 
-    if not rows:
-        st.error("Error: Could not extract valid data from the uploaded PDF. "
-                  "Ensure text is selectable (not a scanned image).")
-    else:
-        st.success(f"Extracted {len(rows)} passenger row(s) from {uploaded_file.name}.")
+    if new_files:
+        # Only extract files that haven't been processed yet - a file already in
+        # the cache is left completely untouched, even though the uploader
+        # widget re-returns the full current file list on every rerun. Matching
+        # a whole re-accumulated batch against the master list on every rerun
+        # would re-flag already-matched files as "duplicate" purely from being
+        # reprocessed, not because of an actual duplicate ticket.
+        progress = st.progress(0.0, text="Extracting tickets...")
+        for i, f in enumerate(new_files):
+            rows, warning = extract_from_pdf(f, trip_type)
+            if warning:
+                st.warning(f"{f.name}: {warning}")
+            if not rows:
+                st.error(f"{f.name}: Could not extract valid data. Ensure text is selectable (not a scanned image).")
+                rows = []
+            else:
+                match_rows_against_master(rows)
+            st.session_state["ticket_rows_cache"][(f.name, f.size)] = rows
+            progress.progress((i + 1) / len(new_files), text=f"Extracted {i + 1}/{len(new_files)}")
+        progress.empty()
+
+    all_rows = []
+    for ident in current_identities:
+        all_rows.extend(st.session_state["ticket_rows_cache"].get(ident, []))
+
+    if all_rows:
+        st.success(f"Extracted {len(all_rows)} passenger row(s) from {len(current_identities)} ticket(s).")
         column_order = ["File Name", "PNR", "Name", "Gender", "Sector",
                          "Flight Number", "Return Sector", "Return Flight Number"]
-        df = pd.DataFrame(rows)[column_order]
-
-        if st.session_state.get("master_tracking"):
-            for _, row in df.iterrows():
-                key = normalize_name(row["Name"])
-                for entry in st.session_state["master_tracking"]:
-                    if entry["_key"] == key:
-                        if entry["Status"] == "Matched":
-                            # Same master name matched by more than one ticket -
-                            # note it rather than silently overwriting the first match.
-                            entry["Status"] = "Matched (duplicate ticket)"
-                        else:
-                            entry["Status"] = "Matched"
-                        entry["Matched File"] = row["File Name"]
-                        entry["Matched PNR"] = row["PNR"]
-                        extracted_gender = normalize_gender(row["Gender"])
-                        entry["Gender Check"] = "✅ Match" if extracted_gender == entry["_gender_norm"] else "❌ Mismatch"
-                        break
-
+        df = pd.DataFrame(all_rows)[column_order]
         st.dataframe(df, use_container_width=True)
 
-        csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("Download as CSV", csv, "ticket_data.csv", "text/csv")
+        csv_bytes = df.to_csv(index=False).encode("utf-8")
+        st.download_button("Download as CSV", csv_bytes, "ticket_data.csv", "text/csv")
 
 if st.session_state.get("master_tracking"):
     st.divider()
@@ -291,3 +325,4 @@ if st.session_state.get("master_tracking"):
 
     tracking_csv = tracking_df.to_csv(index=False).encode("utf-8")
     st.download_button("Download Master Tracking as CSV", tracking_csv, "master_tracking.csv", "text/csv")
+    
