@@ -131,10 +131,16 @@ if master_file:
         # A new (or newly re-uploaded) Master file - start tracking fresh rather
         # than keeping stale match state from a previous file.
         tracking_rows, master_warning = read_master_file(master_file)
-        if master_warning:
-            st.warning(master_warning)
         st.session_state["master_tracking"] = tracking_rows
         st.session_state["master_identity"] = master_identity
+        st.session_state["master_warning"] = master_warning
+
+    # Shown every run, not just the one where the file was first processed - a
+    # real problem with the master file (e.g. wrong column names) needs to stay
+    # visible, not disappear the moment any other widget on the page is touched
+    # (like uploading a ticket), even though the underlying problem persists.
+    if st.session_state.get("master_warning"):
+        st.warning(st.session_state["master_warning"])
 
     if st.session_state.get("master_tracking"):
         st.caption(f"Master file loaded - {len(st.session_state['master_tracking'])} name(s) being tracked.")
@@ -237,3 +243,4 @@ if st.session_state.get("master_tracking"):
 
     tracking_csv = tracking_df.to_csv(index=False).encode("utf-8")
     st.download_button("Download Master Tracking as CSV", tracking_csv, "master_tracking.csv", "text/csv")
+    
