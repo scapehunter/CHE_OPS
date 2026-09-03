@@ -337,14 +337,12 @@ if st.session_state.get("master_tracking"):
     st.divider()
     st.subheader("Master List Tracking")
     st.caption("Updates as each ticket is uploaded - reflects every ticket processed so far this session.")
-    tracking_df = pd.DataFrame(st.session_state["master_tracking"])[
-        ["Name", "Gender", "Status", "Matched File", "Matched PNR", "Sector", "Gender Check"]
-    ]
+    display_columns = ["Name", "Gender", "Status", "Matched File", "Matched PNR", "Sector", "Gender Check"]
+    tracking_df = pd.DataFrame(st.session_state["master_tracking"]).reindex(columns=display_columns, fill_value="")
     matched_count = (tracking_df["Status"] != "Not Found").sum()
     st.caption(f"{matched_count} / {len(tracking_df)} matched")
     st.dataframe(tracking_df, use_container_width=True, hide_index=True)
 
     tracking_csv = tracking_df.to_csv(index=False).encode("utf-8")
     st.download_button("Download Master Tracking as CSV", tracking_csv, "master_tracking.csv", "text/csv")
-
     
