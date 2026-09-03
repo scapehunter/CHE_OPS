@@ -80,6 +80,12 @@ def match_rows_against_master(rows):
     st.session_state["master_tracking"] directly, since it's the same list
     object). Shared between processing a newly-uploaded ticket and re-syncing
     after "Reset Master Tracking" is clicked, so both paths behave identically.
+
+    Tracks every file/PNR that matched a given person, not just the most recent
+    one - a person legitimately appearing on more than one ticket (separate
+    onward and return PDFs, common when they're booked or issued separately) is
+    the expected case, not a data problem, so it's shown as a normal match count
+    rather than flagged as a "duplicate".
     """
     if not st.session_state.get("master_tracking"):
         return
@@ -87,16 +93,25 @@ def match_rows_against_master(rows):
         key = normalize_name(row["Name"])
         for entry in st.session_state["master_tracking"]:
             if entry["_key"] == key:
-                if entry["Status"] == "Matched":
-                    # Same master name matched by more than one ticket - note it
-                    # rather than silently overwriting the first match.
-                    entry["Status"] = "Matched (duplicate ticket)"
-                else:
-                    entry["Status"] = "Matched"
-                entry["Matched File"] = row["File Name"]
-                entry["Matched PNR"] = row["PNR"]
+                matched_files = entry.setdefault("_matched_files", [])
+                matched_pnrs = entry.setdefault("_matched_pnrs", [])
+                if row["File Name"] not in matched_files:
+                    matched_files.append(row["File Name"])
+                if row["PNR"] not in matched_pnrs:
+                    matched_pnrs.append(row["PNR"])
+
+                entry["Matched File"] = ", ".join(matched_files)
+                entry["Matched PNR"] = ", ".join(matched_pnrs)
+                entry["Status"] = f"Matched ({len(matched_files)} ticket{'s' if len(matched_files) != 1 else ''})"
+
                 extracted_gender = normalize_gender(row["Gender"])
-                entry["Gender Check"] = "✅ Match" if extracted_gender == entry["_gender_norm"] else "❌ Mismatch"
+                gender_ok = extracted_gender == entry["_gender_norm"]
+                # A genuine mismatch found on any one of the matches stays
+                # visible even if a later match looks fine - worth a look either
+                # way, rather than letting a later "correct" ticket silently
+                # hide an earlier real discrepancy.
+                if entry["Gender Check"] != "❌ Mismatch":
+                    entry["Gender Check"] = "✅ Match" if gender_ok else "❌ Mismatch"
                 break
 
 
@@ -166,6 +181,7 @@ def build_master_tracking(master_df):
             "Name": row[name_col], "Gender": row[gender_col],
             "_key": key, "_gender_norm": normalize_gender(row[gender_col]),
             "Status": "Not Found", "Matched File": "", "Matched PNR": "", "Gender Check": "",
+            "_matched_files": [], "_matched_pnrs": [],
         })
 
     warning = None
@@ -222,6 +238,7 @@ if master_file:
                 if st.button("Reset Master Tracking"):
                     for entry in st.session_state["master_tracking"]:
                         entry["Status"], entry["Matched File"], entry["Matched PNR"], entry["Gender Check"] = "Not Found", "", "", ""
+                        entry["_matched_files"], entry["_matched_pnrs"] = [], []
                     for rows in st.session_state.get("ticket_rows_cache", {}).values():
                         match_rows_against_master(rows)
                     st.rerun()
