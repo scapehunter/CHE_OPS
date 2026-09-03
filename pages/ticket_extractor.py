@@ -44,9 +44,18 @@ master_file = st.file_uploader("Upload Master file (optional)", type=["csv", "xl
 
 
 def normalize_name(name):
-    """Case/whitespace-insensitive - collapses any run of whitespace and lowercases,
-    so 'John  Doe' and 'john doe' are treated as the same name."""
-    return " ".join(str(name).split()).strip().lower()
+    """
+    Returns a sorted tuple of lowercased name words - not just a whitespace/case-
+    collapsed string. Flight tickets very commonly print names as
+    SURNAME/GIVENNAME (a standard IATA convention), while a master roster
+    naturally has them as "Given Name Surname" - a plain string comparison would
+    never match those even though they're the same person. Comparing the *set*
+    of words instead makes the match independent of order or a slash separator,
+    while still correctly NOT matching two genuinely different names (a typo
+    like "Jon" vs "John" stays unmatched, this isn't fuzzy/approximate matching).
+    """
+    words = str(name).replace("/", " ").split()
+    return tuple(sorted(w.lower() for w in words))
 
 
 def normalize_gender(gender):
